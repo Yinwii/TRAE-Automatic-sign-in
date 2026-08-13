@@ -1,0 +1,573 @@
+namespace TraeCheckin;
+
+/// <summary>
+/// 主界面：深色侧边栏 + 蓝色强调 + 浅色内容区。
+/// 固定小窗（不可缩放），左侧导航可切换「仪表盘 / 签到记录 / 设置」。
+/// </summary>
+public class MainForm : Form
+{
+    private static readonly Color SidebarBg = Color.FromArgb(30, 41, 59);      // #1E293B
+    private static readonly Color Accent = Color.FromArgb(59, 130, 246);       // #3B82F6
+    private static readonly Color ContentBg = Color.FromArgb(241, 245, 249);   // #F1F5F9
+    private static readonly Color CardBg = Color.White;
+    private static readonly Color TextMain = Color.FromArgb(15, 23, 42);       // #0F172A
+    private static readonly Color TextMuted = Color.FromArgb(100, 116, 139);   // #64748B
+
+    private AppConfig _config;
+    private readonly TraeApiClient _api;
+    private readonly string _userDataDir;
+    private NotifyIcon _tray = new();
+    private readonly ContextMenuStrip _trayMenu = new();
+
+    private readonly List<Panel> _navItems = new();
+    private readonly List<Panel> _pages = new();
+
+    // 仪表盘
+    private readonly Label _lblRemaining = new() { Font = new Font("Segoe UI", 28, FontStyle.Bold) };
+    private readonly Label _lblStatus = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
+    private readonly Label _lblReward = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
+    private readonly CheckBox _chkAutoDash = new();
+    private readonly DateTimePicker _dtpTimeDash = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true };
+    private readonly ListBox _log = new();
+
+    // 设置页（独立控件，避免跨页共享导致显示异常）
+    private readonly CheckBox _chkAutoSet = new();
+    private readonly DateTimePicker _dtpTimeSet = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true };
+
+    private readonly Button _btnCheckin = new() { Font = new Font("Segoe UI", 12, FontStyle.Bold), Height = 44 };
+
+    // 签到记录
+    private readonly ListBox _historyList = new();
+    private Label _lblLastCheckin = new();
+
+    // 状态栏
+    private readonly Label _lblLogin = new();
+    private readonly Label _lblTime = new();
+
+    private System.Windows.Forms.Timer _autoTimer = new();
+    private DateTime _lastAutoCheck = DateTime.MinValue;
+
+    private static string HistoryPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "history.txt");
+
+    public MainForm()
+    {
+        _config = AppConfig.Load();
+        _api = new TraeApiClient(_config.DeviceId);
+        _userDataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TraeCheckin", "WebView");
+
+        Text = "Trae 每日签到助手";
+        ClientSize = new Size(820, 640);
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = true;
+        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = ContentBg;
+
+        BuildUi();
+        BuildTray();
+        ShowPage(0);
+    }
+
+    private void BuildUi()
+    {
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, Padding = Padding.Empty };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        root.Controls.Add(BuildSidebar(), 0, 0);
+        root.Controls.Add(BuildContentHost(), 1, 0);
+        Controls.Add(root);
+    }
+
+    private Control BuildSidebar()
+    {
+        var side = new Panel { Dock = DockStyle.Fill, BackColor = SidebarBg };
+
+        // 标题区：单独 Panel 精确定位，避免 Dock 叠加 padding 导致截断
+        var header = new Panel { Dock = DockStyle.Top, Height = 160, BackColor = SidebarBg };
+        var title = new Label
+        {
+            Text = "Trae",
+            Font = new Font("Segoe UI", 20, FontStyle.Bold),
+            ForeColor = Color.White,
+            Location = new Point(16, 28),
+            Size = new Size(180, 46),
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        var subtitle = new Label
+        {
+            Text = "每日签到助手",
+            Font = new Font("Segoe UI", 11, FontStyle.Bold),
+            ForeColor = Color.FromArgb(148, 163, 184),
+            Location = new Point(16, 84),
+            Size = new Size(180, 28),
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        header.Controls.Add(subtitle);
+        header.Controls.Add(title);
+
+        var nav = new Panel { Dock = DockStyle.Top, Height = 150, BackColor = SidebarBg, Padding = new Padding(0, 14, 0, 0) };
+        _navItems.Add(NavItem("仪表盘", 0));
+        _navItems.Add(NavItem("签到记录", 1));
+        _navItems.Add(NavItem("设置", 2));
+        for (int i = _navItems.Count - 1; i >= 0; i--)
+            nav.Controls.Add(_navItems[i]);
+
+        var bottom = new Panel { Dock = DockStyle.Fill, BackColor = SidebarBg, Padding = new Padding(14, 0, 14, 16) };
+        _btnCheckin.Text = "立即签到";
+        _btnCheckin.Dock = DockStyle.Bottom;
+        _btnCheckin.Height = 46;
+        _btnCheckin.FlatStyle = FlatStyle.Flat;
+        _btnCheckin.FlatAppearance.BorderSize = 0;
+        _btnCheckin.BackColor = Accent;
+        _btnCheckin.ForeColor = Color.White;
+        _btnCheckin.Cursor = Cursors.Hand;
+        _btnCheckin.Click += async (_, _) => await DoCheckinAsync();
+        bottom.Controls.Add(_btnCheckin);
+
+        side.Controls.Add(bottom);
+        side.Controls.Add(nav);
+        side.Controls.Add(header);
+        return side;
+    }
+
+    private Panel NavItem(string text, int index)
+    {
+        var p = new Panel
+        {
+            Height = 44,
+            Dock = DockStyle.Top,
+            BackColor = SidebarBg,
+            Padding = new Padding(12, 0, 12, 0),
+            Cursor = Cursors.Hand,
+            Tag = index
+        };
+        var lbl = new Label
+        {
+            Text = "  " + text,
+            Font = new Font("Segoe UI", 11),
+            ForeColor = Color.FromArgb(203, 213, 225),
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        p.Controls.Add(lbl);
+        p.Click += (_, _) => ShowPage(index);
+        lbl.Click += (_, _) => ShowPage(index);
+        return p;
+    }
+
+    private void ShowPage(int index)
+    {
+        if (index < 0 || index >= _pages.Count) return;
+        for (int i = 0; i < _pages.Count; i++)
+        {
+            _pages[i].Visible = i == index;
+            var nav = _navItems[i];
+            nav.BackColor = i == index ? Accent : SidebarBg;
+            if (nav.Controls[0] is Label l)
+                l.ForeColor = i == index ? Color.White : Color.FromArgb(203, 213, 225);
+        }
+    }
+
+    private Control BuildContentHost()
+    {
+        var host = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg };
+        _pages.Add(BuildDashboard());
+        _pages.Add(BuildHistory());
+        _pages.Add(BuildSettings());
+        foreach (var pg in _pages)
+        {
+            pg.Dock = DockStyle.Fill;
+            host.Controls.Add(pg);
+        }
+        return host;
+    }
+
+    private Panel BuildDashboard()
+    {
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg, Padding = new Padding(16) };
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 5,
+            BackColor = ContentBg,
+            Padding = Padding.Empty,
+            Margin = Padding.Empty
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        // 剩余积分(130) | 状态/奖励(100) | 自动签到(68) | 日志(剩余)
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        // 剩余积分（跨两列）
+        var remCard = Card("剩余积分", _lblRemaining);
+        _lblRemaining.TextAlign = ContentAlignment.MiddleLeft;
+        _lblRemaining.Dock = DockStyle.Fill;
+        _lblRemaining.ForeColor = TextMain;
+        root.Controls.Add(remCard, 0, 0);
+        root.SetColumnSpan(remCard, 2);
+
+        // 今日签到状态
+        var statusCard = Card("今日签到状态", _lblStatus);
+        _lblStatus.TextAlign = ContentAlignment.MiddleLeft;
+        _lblStatus.Dock = DockStyle.Fill;
+        root.Controls.Add(statusCard, 0, 1);
+
+        // 单日签到奖励
+        var rewardCard = Card("单日签到奖励", _lblReward);
+        _lblReward.TextAlign = ContentAlignment.MiddleLeft;
+        _lblReward.Dock = DockStyle.Fill;
+        root.Controls.Add(rewardCard, 1, 1);
+
+        // 自动签到（跨两列）
+        var autoPanel = new Panel { Dock = DockStyle.Fill, BackColor = CardBg, Margin = new Padding(6), Padding = new Padding(14, 10, 14, 10) };
+        var autoRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+        _chkAutoDash.Text = "开启每日自动签到";
+        _chkAutoDash.Checked = _config.AutoCheckinEnabled;
+        _chkAutoDash.AutoSize = true;
+        _chkAutoDash.ForeColor = TextMain;
+        _chkAutoDash.Margin = new Padding(0, 8, 20, 0);
+        _chkAutoDash.CheckedChanged += (_, _) => SyncAutoCheckin(_chkAutoDash.Checked, _dtpTimeDash.Value);
+        var lbl = new Label { Text = "时间:", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 10, 6, 0) };
+        if (TimeSpan.TryParse(_config.AutoCheckinTime, out var ts))
+            _dtpTimeDash.Value = DateTime.Today.Add(ts);
+        _dtpTimeDash.ValueChanged += (_, _) => SyncAutoCheckin(_chkAutoDash.Checked, _dtpTimeDash.Value);
+        _dtpTimeDash.Width = 90;
+        autoRow.Controls.Add(_chkAutoDash);
+        autoRow.Controls.Add(lbl);
+        autoRow.Controls.Add(_dtpTimeDash);
+        autoPanel.Controls.Add(autoRow);
+        root.Controls.Add(autoPanel, 0, 2);
+        root.SetColumnSpan(autoPanel, 2);
+
+        // 日志
+        _log.Dock = DockStyle.Fill;
+        _log.BackColor = CardBg;
+        _log.ForeColor = TextMuted;
+        _log.BorderStyle = BorderStyle.None;
+        _log.HorizontalScrollbar = false;
+        var logCard = Card("运行日志", _log);
+        root.Controls.Add(logCard, 0, 3);
+        root.SetColumnSpan(logCard, 2);
+
+        p.Controls.Add(root);
+        return p;
+    }
+
+    private Panel BuildHistory()
+    {
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg, Padding = new Padding(16) };
+        _lblLastCheckin = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 34,
+            Font = new Font("Segoe UI", 11),
+            ForeColor = TextMain,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        _historyList.Dock = DockStyle.Fill;
+        _historyList.BackColor = CardBg;
+        _historyList.ForeColor = TextMain;
+        _historyList.BorderStyle = BorderStyle.None;
+        _historyList.HorizontalScrollbar = false;
+        p.Controls.Add(_historyList);
+        p.Controls.Add(_lblLastCheckin);
+        ReloadHistory();
+        return p;
+    }
+
+    private Panel BuildSettings()
+    {
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg, Padding = new Padding(16) };
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = ContentBg };
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var autoPanel = CardPanel("每日自动签到", BuildAutoRow());
+        grid.Controls.Add(autoPanel, 0, 0);
+
+        var acctPanel = CardPanel("账号", BuildAccountRow());
+        grid.Controls.Add(acctPanel, 0, 1);
+
+        var hint = new Label
+        {
+            Text = "提示：本程序固定小窗显示。关闭窗口后自动最小化到系统托盘，后台继续自动签到。",
+            Dock = DockStyle.Fill,
+            ForeColor = TextMuted,
+            Font = new Font("Segoe UI", 9),
+            Padding = new Padding(4, 12, 0, 0)
+        };
+        grid.Controls.Add(hint, 0, 2);
+
+        p.Controls.Add(grid);
+        return p;
+    }
+
+    private Control BuildAutoRow()
+    {
+        var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+        var lbl = new Label { Text = "时间:", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 12, 6, 0) };
+        _chkAutoSet.Text = "开启每日自动签到";
+        _chkAutoSet.Checked = _config.AutoCheckinEnabled;
+        _chkAutoSet.AutoSize = true;
+        _chkAutoSet.ForeColor = TextMain;
+        _chkAutoSet.Margin = new Padding(0, 10, 20, 0);
+        _chkAutoSet.CheckedChanged += (_, _) => SyncAutoCheckin(_chkAutoSet.Checked, _dtpTimeSet.Value);
+        if (TimeSpan.TryParse(_config.AutoCheckinTime, out var ts))
+            _dtpTimeSet.Value = DateTime.Today.Add(ts);
+        _dtpTimeSet.ValueChanged += (_, _) => SyncAutoCheckin(_chkAutoSet.Checked, _dtpTimeSet.Value);
+        _dtpTimeSet.Width = 90;
+        row.Controls.Add(_chkAutoSet);
+        row.Controls.Add(lbl);
+        row.Controls.Add(_dtpTimeSet);
+        return row;
+    }
+
+    private void SyncAutoCheckin(bool enabled, DateTime time)
+    {
+        _config.AutoCheckinEnabled = enabled;
+        _config.AutoCheckinTime = time.ToString("HH:mm");
+        _config.Save();
+        if (_chkAutoDash.Checked != enabled) _chkAutoDash.Checked = enabled;
+        if (_chkAutoSet.Checked != enabled) _chkAutoSet.Checked = enabled;
+        if (_dtpTimeDash.Value.ToString("HH:mm") != _config.AutoCheckinTime)
+            _dtpTimeDash.Value = DateTime.Today.Add(TimeSpan.Parse(_config.AutoCheckinTime));
+        if (_dtpTimeSet.Value.ToString("HH:mm") != _config.AutoCheckinTime)
+            _dtpTimeSet.Value = DateTime.Today.Add(TimeSpan.Parse(_config.AutoCheckinTime));
+    }
+
+    private Control BuildAccountRow()
+    {
+        var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+        var btnLogin2 = new Button { Text = "重新登录", Width = 100, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        btnLogin2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
+        btnLogin2.Click += async (_, _) => await LoginAndRefreshAsync();
+        var btnRefresh2 = new Button { Text = "刷新", Width = 80, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        btnRefresh2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
+        btnRefresh2.Click += async (_, _) => await RefreshAllAsync();
+        var btnExit2 = new Button { Text = "退出", Width = 80, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        btnExit2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
+        btnExit2.Click += (_, _) => Close();
+        row.Controls.Add(btnLogin2);
+        row.Controls.Add(btnRefresh2);
+        row.Controls.Add(btnExit2);
+        return row;
+    }
+
+    private Panel CardPanel(string title, Control body)
+    {
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = CardBg, Padding = new Padding(16, 12, 16, 6), Margin = new Padding(0, 0, 0, 10) };
+        var t = new Label { Text = title, Dock = DockStyle.Top, Height = 26, Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = TextMain };
+        body.Dock = DockStyle.Fill;
+        p.Controls.Add(body);
+        p.Controls.Add(t);
+        return p;
+    }
+
+    private Panel Card(string title, Control body)
+    {
+        var p = new Panel { Dock = DockStyle.Fill, BackColor = CardBg, Padding = new Padding(14, 10, 14, 10), Margin = new Padding(6) };
+        var t = new Label
+        {
+            Text = title,
+            Dock = DockStyle.Top,
+            Height = 24,
+            Font = new Font("Segoe UI", 9),
+            ForeColor = TextMuted
+        };
+        body.Dock = DockStyle.Fill;
+        p.Controls.Add(body);
+        p.Controls.Add(t);
+        return p;
+    }
+
+    private void BuildTray()
+    {
+        _tray.Text = "Trae 每日签到助手";
+        _tray.Icon = SystemIcons.Information;
+        _tray.Visible = true;
+        _trayMenu.Items.Add("显示主界面", null, (_, _) => ShowMainWindow());
+        _trayMenu.Items.Add("立即签到", null, async (_, _) => await DoCheckinAsync());
+        _trayMenu.Items.Add("退出", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
+        _tray.ContextMenuStrip = _trayMenu;
+        _tray.DoubleClick += (_, _) => ShowMainWindow();
+    }
+
+    private void ShowMainWindow()
+    {
+        Show();
+        ShowInTaskbar = true;
+        Activate();
+    }
+
+    protected override async void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        var hasToken = !string.IsNullOrEmpty(_config.Token);
+        _lblLogin.Text = hasToken ? "● 已登录" : "○ 未登录";
+        SetLog($"程序已启动，已{(hasToken ? "登录" : "未登录，请在设置页登录")}");
+        await RefreshAllAsync();
+        StartAutoTimer();
+    }
+
+    private void StartAutoTimer()
+    {
+        _autoTimer = new System.Windows.Forms.Timer { Interval = 10_000 };
+        _autoTimer.Tick += async (_, _) => await CheckAutoCheckinAsync();
+        _autoTimer.Start();
+        _lastAutoCheck = DateTime.MinValue;
+    }
+
+    private async Task CheckAutoCheckinAsync()
+    {
+        if (!_config.AutoCheckinEnabled) return;
+        var now = DateTime.Now;
+        if (now.Date == _lastAutoCheck.Date) return;
+        if (!TimeSpan.TryParse(_config.AutoCheckinTime, out var target)) return;
+        var scheduled = now.Date.Add(target);
+        if (now < scheduled) return;
+        _lastAutoCheck = now.Date;
+        var late = (now - scheduled).TotalSeconds > 120;
+        SetLog(late
+            ? $"已超过设定的自动签到时间 {target:hh\\:mm}，执行补签…"
+            : $"到达自动签到时间 {target:hh\\:mm}，开始签到…");
+        await RefreshAllAsync();
+        await DoCheckinAsync();
+    }
+
+    private async Task RefreshAllAsync()
+    {
+        var status = await GetStatusWithValidTokenAsync();
+        var remaining = _config.LastRemaining;
+        if (!string.IsNullOrEmpty(_config.Token))
+        {
+            var r = await _api.GetRemainingCreditsAsync(_config.Token);
+            if (r >= 0) { remaining = r; _config.LastRemaining = r; _config.Save(); }
+        }
+
+        _lblRemaining.Text = remaining >= 0 ? remaining.ToString("0.##") : "—";
+        if (status != null)
+        {
+            _lblStatus.Text = status.enable
+                ? (status.checked_in ? "今日已签到 ✓" : "今日可签到")
+                : "签到功能未开启";
+            _lblStatus.ForeColor = status.checked_in ? Color.FromArgb(16, 185, 129) : Color.FromArgb(245, 158, 11);
+            _lblReward.Text = status.credits > 0 ? $"{status.credits:0} 积分" : "—";
+        }
+        else _lblStatus.Text = "获取失败";
+        _lblTime.Text = "上次刷新：" + DateTime.Now.ToString("HH:mm:ss");
+    }
+
+    private async Task DoCheckinAsync()
+    {
+        var status = await GetStatusWithValidTokenAsync();
+        if (status != null && status.checked_in)
+        {
+            SetLog("今日已签到，无需重复签到。");
+            await RefreshAllAsync();
+            return;
+        }
+        if (string.IsNullOrEmpty(_config.Token))
+        {
+            SetLog("未登录，请先在设置页登录。");
+            return;
+        }
+        SetLog("正在签到…");
+        var result = await _api.ClaimAsync(_config.Token);
+        if (result == null || result.code != 0)
+        {
+            SetLog("签到失败：" + (_api.LastError ?? result?.message ?? "未知错误"));
+            return;
+        }
+        _config.LastCheckinDate = DateTime.Today;
+        _config.Save();
+        SetLog($"签到成功！获得 {result.credits:0} 积分。");
+        AppendHistory(DateTime.Now, result.credits);
+        await RefreshAllAsync();
+    }
+
+    private async Task<CheckinStatus?> GetStatusWithValidTokenAsync()
+    {
+        if (!string.IsNullOrEmpty(_config.Token))
+        {
+            var st = await _api.GetStatusAsync(_config.Token);
+            if (st != null && st.code == 0) return st;
+            SetLog("token 已失效，尝试重新获取…");
+        }
+        return await LoginAndRefreshAsync();
+    }
+
+    private async Task<CheckinStatus?> LoginAndRefreshAsync()
+    {
+        string token = string.Empty;
+        using (var login = new LoginForm(_userDataDir, t => token = t))
+            login.ShowDialog();
+        if (string.IsNullOrEmpty(token))
+        {
+            SetLog("登录取消。");
+            return null;
+        }
+        _config.Token = token;
+        _config.Save();
+        _lblLogin.Text = "● 已登录";
+        SetLog("登录成功，token 已保存。");
+        return await _api.GetStatusAsync(token);
+    }
+
+    private void SetLog(string msg)
+    {
+        if (InvokeRequired) { BeginInvoke(new Action<string>(SetLog), msg); return; }
+        _log.Items.Add($"[{DateTime.Now:HH:mm:ss}] {msg}");
+        _log.TopIndex = _log.Items.Count - 1;
+    }
+
+    private void AppendHistory(DateTime time, double credits)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(HistoryPath)!);
+            File.AppendAllText(HistoryPath, $"{time:yyyy-MM-dd HH:mm}  签到成功  +{credits:0} 积分{Environment.NewLine}");
+        }
+        catch { }
+        ReloadHistory();
+    }
+
+    private void ReloadHistory()
+    {
+        try
+        {
+            var lines = File.Exists(HistoryPath) ? File.ReadAllLines(HistoryPath).Reverse().ToList() : new List<string>();
+            _historyList.Items.Clear();
+            foreach (var line in lines)
+                _historyList.Items.Add(line);
+            _lblLastCheckin.Text = _config.LastCheckinDate.HasValue
+                ? $"最近签到：{_config.LastCheckinDate:yyyy-MM-dd}"
+                : "暂无签到记录";
+        }
+        catch { }
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (e.CloseReason == CloseReason.UserClosing && _config.AutoCheckinEnabled)
+        {
+            e.Cancel = true;
+            Hide();
+            ShowInTaskbar = false;
+            _tray.Visible = true;
+            return;
+        }
+        _tray?.Dispose();
+        base.OnFormClosing(e);
+    }
+}
