@@ -37,11 +37,13 @@ public class TraeApiClient
     }
 
     /// <summary>构造每请求的认证头。</summary>
-    private HttpRequestMessage BuildRequest(HttpMethod method, string path, string? token, string? body)
+    internal HttpRequestMessage BuildRequest(HttpMethod method, string path, string? token, string? body)
     {
         var req = new HttpRequestMessage(method, BaseUrl + path);
         if (!string.IsNullOrEmpty(token))
             req.Headers.TryAddWithoutValidation("Authorization", "Cloud-IDE-JWT " + token);
+        req.Headers.TryAddWithoutValidation("X-User-Region", "cn");
+        // 风控关键：x-device-id 必须是 16 位数字 Aha 设备号；使用 GUID/UUID 会触发 9074（"参与用户太多"）
         req.Headers.TryAddWithoutValidation("x-device-id", _deviceId);
         if (body != null)
         {

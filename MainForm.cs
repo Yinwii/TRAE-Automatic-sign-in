@@ -26,13 +26,16 @@ public class MainForm : Form
     private readonly Label _lblRemaining = new() { Font = new Font("Segoe UI", 28, FontStyle.Bold) };
     private readonly Label _lblStatus = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
     private readonly Label _lblReward = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
-    private readonly CheckBox _chkAutoDash = new();
-    private readonly DateTimePicker _dtpTimeDash = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true };
     private readonly ListBox _log = new();
 
     // 设置页（独立控件，避免跨页共享导致显示异常）
     private readonly CheckBox _chkAutoSet = new();
     private readonly DateTimePicker _dtpTimeSet = new() { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true };
+    private readonly CheckBox _chkAutoStart = new();
+
+    // Token 信息（设置页）
+    private readonly TextBox _txtToken = new();
+    private readonly Label _lblTokenTime = new();
 
     private readonly Button _btnCheckin = new() { Font = new Font("Segoe UI", 12, FontStyle.Bold), Height = 44 };
 
@@ -40,15 +43,25 @@ public class MainForm : Form
     private readonly ListBox _historyList = new();
     private Label _lblLastCheckin = new();
 
-    // 状态栏
-    private readonly Label _lblLogin = new();
-    private readonly Label _lblTime = new();
-
     private System.Windows.Forms.Timer _autoTimer = new();
     private DateTime _lastAutoCheck = DateTime.MinValue;
+    private bool _allowClose;
 
     private static string HistoryPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "history.txt");
+
+    private static readonly Icon AppIcon = LoadAppIcon();
+
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            using var s = typeof(MainForm).Assembly.GetManifestResourceStream("TraeCheckin.app.ico");
+            if (s != null) return new Icon(s);
+        }
+        catch { /* 读取嵌入图标失败时回退系统图标 */ }
+        return SystemIcons.Application;
+    }
 
     public MainForm()
     {
@@ -64,6 +77,7 @@ public class MainForm : Form
         MinimizeBox = true;
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = ContentBg;
+        Icon = AppIcon;
 
         BuildUi();
         BuildTray();
@@ -195,17 +209,16 @@ public class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 5,
+            RowCount = 4,
             BackColor = ContentBg,
             Padding = Padding.Empty,
             Margin = Padding.Empty
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        // 剩余积分(130) | 状态/奖励(100) | 自动签到(68) | 日志(剩余)
+        // 剩余积分(130) | 状态/奖励(100) | 日志(剩余)
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         // 剩余积分（跨两列）
@@ -228,27 +241,6 @@ public class MainForm : Form
         _lblReward.Dock = DockStyle.Fill;
         root.Controls.Add(rewardCard, 1, 1);
 
-        // 自动签到（跨两列）
-        var autoPanel = new Panel { Dock = DockStyle.Fill, BackColor = CardBg, Margin = new Padding(6), Padding = new Padding(14, 10, 14, 10) };
-        var autoRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
-        _chkAutoDash.Text = "开启每日自动签到";
-        _chkAutoDash.Checked = _config.AutoCheckinEnabled;
-        _chkAutoDash.AutoSize = true;
-        _chkAutoDash.ForeColor = TextMain;
-        _chkAutoDash.Margin = new Padding(0, 8, 20, 0);
-        _chkAutoDash.CheckedChanged += (_, _) => SyncAutoCheckin(_chkAutoDash.Checked, _dtpTimeDash.Value);
-        var lbl = new Label { Text = "时间:", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 10, 6, 0) };
-        if (TimeSpan.TryParse(_config.AutoCheckinTime, out var ts))
-            _dtpTimeDash.Value = DateTime.Today.Add(ts);
-        _dtpTimeDash.ValueChanged += (_, _) => SyncAutoCheckin(_chkAutoDash.Checked, _dtpTimeDash.Value);
-        _dtpTimeDash.Width = 90;
-        autoRow.Controls.Add(_chkAutoDash);
-        autoRow.Controls.Add(lbl);
-        autoRow.Controls.Add(_dtpTimeDash);
-        autoPanel.Controls.Add(autoRow);
-        root.Controls.Add(autoPanel, 0, 2);
-        root.SetColumnSpan(autoPanel, 2);
-
         // 日志
         _log.Dock = DockStyle.Fill;
         _log.BackColor = CardBg;
@@ -256,7 +248,7 @@ public class MainForm : Form
         _log.BorderStyle = BorderStyle.None;
         _log.HorizontalScrollbar = false;
         var logCard = Card("运行日志", _log);
-        root.Controls.Add(logCard, 0, 3);
+        root.Controls.Add(logCard, 0, 2);
         root.SetColumnSpan(logCard, 2);
 
         p.Controls.Add(root);
@@ -288,16 +280,24 @@ public class MainForm : Form
     private Panel BuildSettings()
     {
         var p = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg, Padding = new Padding(16) };
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = ContentBg };
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, BackColor = ContentBg };
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var autoPanel = CardPanel("每日自动签到", BuildAutoRow());
         grid.Controls.Add(autoPanel, 0, 0);
 
+        var autoStartPanel = CardPanel("开机自启动", BuildAutoStartRow());
+        grid.Controls.Add(autoStartPanel, 0, 1);
+
+        var tokenPanel = CardPanel("登录 Token", BuildTokenRow());
+        grid.Controls.Add(tokenPanel, 0, 2);
+
         var acctPanel = CardPanel("账号", BuildAccountRow());
-        grid.Controls.Add(acctPanel, 0, 1);
+        grid.Controls.Add(acctPanel, 0, 3);
 
         var hint = new Label
         {
@@ -307,10 +307,86 @@ public class MainForm : Form
             Font = new Font("Segoe UI", 9),
             Padding = new Padding(4, 12, 0, 0)
         };
-        grid.Controls.Add(hint, 0, 2);
+        grid.Controls.Add(hint, 0, 4);
 
         p.Controls.Add(grid);
         return p;
+    }
+
+    private Control BuildTokenRow()
+    {
+        var panel = new Panel { Dock = DockStyle.Fill, BackColor = CardBg };
+
+        _txtToken.ReadOnly = true;
+        _txtToken.Multiline = true;
+        _txtToken.WordWrap = true;
+        _txtToken.ScrollBars = ScrollBars.Vertical;
+        _txtToken.BorderStyle = BorderStyle.FixedSingle;
+        _txtToken.BackColor = Color.FromArgb(248, 250, 252);
+        _txtToken.ForeColor = TextMain;
+        _txtToken.Font = new Font("Consolas", 9);
+        _txtToken.Dock = DockStyle.Top;
+        _txtToken.Height = 54;
+
+        var bottomRow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = CardBg,
+            Padding = new Padding(0, 8, 0, 0)
+        };
+
+        var btnCopy = new Button
+        {
+            Text = "复制 Token",
+            Width = 100,
+            Height = 28,
+            Margin = new Padding(0, 0, 12, 0),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Accent,
+            ForeColor = Color.White,
+            Cursor = Cursors.Hand
+        };
+        btnCopy.FlatAppearance.BorderSize = 0;
+        btnCopy.Click += (_, _) => CopyToken();
+
+        _lblTokenTime.AutoSize = true;
+        _lblTokenTime.ForeColor = TextMuted;
+        _lblTokenTime.Font = new Font("Segoe UI", 9);
+
+        bottomRow.Controls.Add(btnCopy);
+        bottomRow.Controls.Add(_lblTokenTime);
+
+        panel.Controls.Add(bottomRow);
+        panel.Controls.Add(_txtToken);
+
+        UpdateTokenDisplay();
+        return panel;
+    }
+
+    private void CopyToken()
+    {
+        if (string.IsNullOrEmpty(_config.Token))
+        {
+            MessageBox.Show("暂无 token，请先登录。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(_config.Token);
+            SetLog("Token 已复制到剪贴板。");
+        }
+        catch (Exception ex)
+        {
+            SetLog("复制失败：" + ex.Message);
+        }
+    }
+
+    private void UpdateTokenDisplay()
+    {
+        _txtToken.Text = string.IsNullOrEmpty(_config.Token) ? "未登录，暂无 token" : _config.Token;
+        _lblTokenTime.Text = "最后更新：" + (_config.TokenUpdatedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "从未");
     }
 
     private Control BuildAutoRow()
@@ -333,15 +409,25 @@ public class MainForm : Form
         return row;
     }
 
+    private Control BuildAutoStartRow()
+    {
+        var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+        _chkAutoStart.Text = "登录 Windows 后自动启动本程序";
+        _chkAutoStart.AutoSize = true;
+        _chkAutoStart.ForeColor = TextMain;
+        _chkAutoStart.Margin = new Padding(0, 8, 0, 0);
+        _chkAutoStart.Checked = AutoStartManager.IsEnabled();
+        _chkAutoStart.CheckedChanged += (_, _) => AutoStartManager.SetEnabled(_chkAutoStart.Checked);
+        row.Controls.Add(_chkAutoStart);
+        return row;
+    }
+
     private void SyncAutoCheckin(bool enabled, DateTime time)
     {
         _config.AutoCheckinEnabled = enabled;
         _config.AutoCheckinTime = time.ToString("HH:mm");
         _config.Save();
-        if (_chkAutoDash.Checked != enabled) _chkAutoDash.Checked = enabled;
         if (_chkAutoSet.Checked != enabled) _chkAutoSet.Checked = enabled;
-        if (_dtpTimeDash.Value.ToString("HH:mm") != _config.AutoCheckinTime)
-            _dtpTimeDash.Value = DateTime.Today.Add(TimeSpan.Parse(_config.AutoCheckinTime));
         if (_dtpTimeSet.Value.ToString("HH:mm") != _config.AutoCheckinTime)
             _dtpTimeSet.Value = DateTime.Today.Add(TimeSpan.Parse(_config.AutoCheckinTime));
     }
@@ -357,7 +443,7 @@ public class MainForm : Form
         btnRefresh2.Click += async (_, _) => await RefreshAllAsync();
         var btnExit2 = new Button { Text = "退出", Width = 80, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
         btnExit2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
-        btnExit2.Click += (_, _) => Close();
+        btnExit2.Click += (_, _) => ExitApp();
         row.Controls.Add(btnLogin2);
         row.Controls.Add(btnRefresh2);
         row.Controls.Add(btnExit2);
@@ -394,13 +480,19 @@ public class MainForm : Form
     private void BuildTray()
     {
         _tray.Text = "Trae 每日签到助手";
-        _tray.Icon = SystemIcons.Information;
+        _tray.Icon = AppIcon;
         _tray.Visible = true;
         _trayMenu.Items.Add("显示主界面", null, (_, _) => ShowMainWindow());
         _trayMenu.Items.Add("立即签到", null, async (_, _) => await DoCheckinAsync());
-        _trayMenu.Items.Add("退出", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
+        _trayMenu.Items.Add("退出", null, (_, _) => ExitApp());
         _tray.ContextMenuStrip = _trayMenu;
         _tray.DoubleClick += (_, _) => ShowMainWindow();
+    }
+
+    private void ExitApp()
+    {
+        _allowClose = true;
+        Close();
     }
 
     private void ShowMainWindow()
@@ -414,7 +506,6 @@ public class MainForm : Form
     {
         base.OnShown(e);
         var hasToken = !string.IsNullOrEmpty(_config.Token);
-        _lblLogin.Text = hasToken ? "● 已登录" : "○ 未登录";
         SetLog($"程序已启动，已{(hasToken ? "登录" : "未登录，请在设置页登录")}");
         await RefreshAllAsync();
         StartAutoTimer();
@@ -465,7 +556,6 @@ public class MainForm : Form
             _lblReward.Text = status.credits > 0 ? $"{status.credits:0} 积分" : "—";
         }
         else _lblStatus.Text = "获取失败";
-        _lblTime.Text = "上次刷新：" + DateTime.Now.ToString("HH:mm:ss");
     }
 
     private async Task DoCheckinAsync()
@@ -474,6 +564,8 @@ public class MainForm : Form
         if (status != null && status.checked_in)
         {
             SetLog("今日已签到，无需重复签到。");
+            if (_config.LastCheckinDate != DateTime.Today)
+                RecordCheckin(status.credits);
             await RefreshAllAsync();
             return;
         }
@@ -489,10 +581,8 @@ public class MainForm : Form
             SetLog("签到失败：" + (_api.LastError ?? result?.message ?? "未知错误"));
             return;
         }
-        _config.LastCheckinDate = DateTime.Today;
-        _config.Save();
         SetLog($"签到成功！获得 {result.credits:0} 积分。");
-        AppendHistory(DateTime.Now, result.credits);
+        RecordCheckin(result.credits);
         await RefreshAllAsync();
     }
 
@@ -510,7 +600,7 @@ public class MainForm : Form
     private async Task<CheckinStatus?> LoginAndRefreshAsync()
     {
         string token = string.Empty;
-        using (var login = new LoginForm(_userDataDir, t => token = t))
+        using (var login = new LoginForm(_userDataDir, _config.Token, t => token = t))
             login.ShowDialog();
         if (string.IsNullOrEmpty(token))
         {
@@ -518,9 +608,10 @@ public class MainForm : Form
             return null;
         }
         _config.Token = token;
+        _config.TokenUpdatedAt = DateTime.Now;
         _config.Save();
-        _lblLogin.Text = "● 已登录";
         SetLog("登录成功，token 已保存。");
+        UpdateTokenDisplay();
         return await _api.GetStatusAsync(token);
     }
 
@@ -529,6 +620,13 @@ public class MainForm : Form
         if (InvokeRequired) { BeginInvoke(new Action<string>(SetLog), msg); return; }
         _log.Items.Add($"[{DateTime.Now:HH:mm:ss}] {msg}");
         _log.TopIndex = _log.Items.Count - 1;
+    }
+
+    private void RecordCheckin(double credits)
+    {
+        _config.LastCheckinDate = DateTime.Today;
+        _config.Save();
+        AppendHistory(DateTime.Now, credits);
     }
 
     private void AppendHistory(DateTime time, double credits)
@@ -559,7 +657,7 @@ public class MainForm : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (e.CloseReason == CloseReason.UserClosing && _config.AutoCheckinEnabled)
+        if (!_allowClose && e.CloseReason == CloseReason.UserClosing && _config.AutoCheckinEnabled)
         {
             e.Cancel = true;
             Hide();

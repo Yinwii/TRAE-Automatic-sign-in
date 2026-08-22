@@ -11,14 +11,16 @@ namespace TraeCheckin;
 public class LoginForm : Form
 {
     private readonly string _userDataDir;
+    private readonly string? _initialToken;
     private WebView2? _webView;
     private readonly Action<string> _onToken;
     private bool _tokenObtained;
     private readonly Button _btnClose = new();
 
-    public LoginForm(string userDataDir, Action<string> onToken)
+    public LoginForm(string userDataDir, string? initialToken, Action<string> onToken)
     {
         _userDataDir = userDataDir;
+        _initialToken = initialToken;
         _onToken = onToken;
 
         Text = "登录 TRAE 账号";
@@ -30,7 +32,7 @@ public class LoginForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
 
         _btnClose.Text = "关闭窗口";
-        _btnClose.Click += (_, _) => { if (!_tokenObtained) _onToken(string.Empty); Close(); };
+        _btnClose.Click += (_, _) => Close();
 
         var top = new Panel { Dock = DockStyle.Top, Height = 44 };
         top.Controls.Add(_btnClose);
@@ -98,7 +100,8 @@ public class LoginForm : Form
             var result = await _webView.CoreWebView2.ExecuteScriptAsync(
                 "(function(){try{var t=localStorage.getItem('Cloud-IDE-Token');return t?t:'';}catch(e){return '';}})()");
             var token = result.Trim('"');
-            if (string.IsNullOrEmpty(token) || token.Length < 40) return;
+            // 仅接受真正重新登录产生的新 token，避免误读 localStorage 中残留的失效 token
+            if (!TokenUtils.ShouldAcceptNewToken(_initialToken, token)) return;
 
             _tokenObtained = true;
             _onToken(token);
