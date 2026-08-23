@@ -89,12 +89,79 @@ public partial class MainForm
         if (!string.IsNullOrEmpty(_config.GitHubToken))
         {
             _lblCloudState.Text = "已授权" + (string.IsNullOrEmpty(_config.GitHubLogin) ? "" : "：" + _config.GitHubLogin);
-            _btnCloudAction.Text = "一键部署到云端";
+            _btnCloudAction.Text = "检测部署状态…";
+            _btnCloudAction.Enabled = false;
+            _ = RefreshDeploymentStateAsync();
         }
         else
         {
             _lblCloudState.Text = "尚未授权 GitHub";
             _btnCloudAction.Text = "授权 GitHub";
+            _btnCloudAction.Enabled = true;
+        }
+    }
+
+    /// <summary>
+    /// 已授权后自动检测云端部署状态：授权失效则回到未授权，已部署则把按钮改成「重新部署」，
+    /// 未部署则保留「一键部署到云端」。
+    /// </summary>
+    private async Task RefreshDeploymentStateAsync()
+    {
+        if (string.IsNullOrEmpty(_config.GitHubToken)) return;
+        string token = _config.GitHubToken;
+        string login = _config.GitHubLogin ?? "";
+        try
+        {
+            if (string.IsNullOrEmpty(login))
+            {
+                login = await _ghApi.GetLoginAsync(token) ?? "";
+                if (!string.IsNullOrEmpty(login))
+                {
+                    _config.GitHubLogin = login;
+                    _config.Save();
+                }
+            }
+
+            if (string.IsNullOrEmpty(login))
+            {
+                _lblCloudState.Text = "无法获取 GitHub 用户名，请重新授权";
+                _btnCloudAction.Text = "授权 GitHub";
+                return;
+            }
+
+            var status = await _ghApi.GetDeploymentStatusAsync(token, login);
+
+            if (!status.IsAuthorized)
+            {
+                // 授权已失效：清除本地授权信息，回到未授权状态
+                _config.GitHubToken = null;
+                _config.GitHubLogin = null;
+                _config.Save();
+                SetCloudLog("GitHub 授权已失效，请重新授权");
+                RefreshCloudState();
+                return;
+            }
+
+            if (status.IsDeployed)
+            {
+                _lblCloudState.Text = "已部署完成，云端每天北京时间 8:00 自动签到";
+                _btnCloudAction.Text = "重新部署";
+            }
+            else
+            {
+                _lblCloudState.Text = "已授权" + (string.IsNullOrEmpty(login) ? "" : "：" + login) + "（尚未部署）";
+                _btnCloudAction.Text = "一键部署到云端";
+            }
+        }
+        catch (Exception ex)
+        {
+            _lblCloudState.Text = "检测部署状态失败，仍可手动部署";
+            _btnCloudAction.Text = "一键部署到云端";
+            SetCloudLog("检测部署状态失败：" + ex.Message);
+        }
+        finally
+        {
+            _btnCloudAction.Enabled = true;
         }
     }
 
@@ -256,6 +323,7 @@ public partial class MainForm
             {
                 SetCloudLog("部署成功！云端自动签到已就绪，GitHub 将每天北京时间 8:00 自动签到。");
                 _lblCloudState.Text = "已部署完成，云端每天自动签到";
+                _btnCloudAction.Text = "重新部署";
             }
             else if (string.IsNullOrEmpty(conclusion))
             {

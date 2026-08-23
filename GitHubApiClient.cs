@@ -22,6 +22,21 @@ public enum DeviceAuthState
     Failed     // 授权被拒绝或过期
 }
 
+/// <summary>云端部署状态检测结果。</summary>
+public class DeploymentStatus
+{
+    /// <summary>access_token 是否仍有效。</summary>
+    public bool IsAuthorized { get; set; } = true;
+    /// <summary>fork 仓库是否已存在。</summary>
+    public bool IsForked { get; set; }
+    /// <summary>TRAE_SESSION 与 TRAE_DEVICE_ID 两个 secret 是否都已写入。</summary>
+    public bool HasSecrets { get; set; }
+    /// <summary>checkin.yml 定时 workflow 是否已启用（state=active）。</summary>
+    public bool IsWorkflowEnabled { get; set; }
+    /// <summary>是否已完成一次完整部署（fork + secrets + workflow 全部就绪）。</summary>
+    public bool IsDeployed => IsForked && HasSecrets && IsWorkflowEnabled;
+}
+
 /// <summary>
 /// GitHub API 客户端：封装设备码授权（Device Flow）与云端自动签到部署所需的
 /// fork / 写 secret / 启用 workflow / 触发 workflow 等 REST 接口。
@@ -227,6 +242,68 @@ public class GitHubApiClient
             }
         }
         return null;
+    }
+
+    // ---------- 部署状态检测 ----------
+
+    /// <summary>
+    /// 检测云端部署状态：授权是否有效、fork 仓库是否存在、secrets 是否已写入、workflow 是否已启用。
+    /// </summary>
+    public async Task<DeploymentStatus> GetDeploymentStatusAsync(string token, string login)
+    {
+        var result = new DeploymentStatus();
+        try
+        {
+            // 用 fork 仓库是否存在同时探测授权：401 表示 token 已失效
+            using var repoResp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}", token);
+            if (repoResp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                result.IsAuthorized = false;
+                return result;
+            }
+            result.IsAuthorized = true;
+            result.IsForked = repoResp.IsSuccessStatusCode;
+            if (!result.IsForked) return result;
+
+            result.HasSecrets = await HasSecretsAsync(token, login);
+            result.IsWorkflowEnabled = await IsWorkflowEnabledAsync(token, login);
+        }
+        catch (Exception ex)
+        {
+            // 网络异常等视为授权仍有效，仅状态未知，避免误删授权
+            LastError = ex.Message;
+            result.IsAuthorized = true;
+        }
+        return result;
+    }
+
+    /// <summary>检查 TRAE_SESSION / TRAE_DEVICE_ID 两个 secret 是否都已写入。</summary>
+    private async Task<bool> HasSecretsAsync(string token, string login)
+    {
+        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/secrets", token);
+        if (!resp.IsSuccessStatusCode) return false;
+        var json = await resp.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("secrets", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return false;
+
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in arr.EnumerateArray())
+            if (s.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                names.Add(n.GetString() ?? "");
+        return names.Contains(SessionSecretName) && names.Contains(DeviceIdSecretName);
+    }
+
+    /// <summary>检查 checkin.yml workflow 是否已启用（state=active）。</summary>
+    private async Task<bool> IsWorkflowEnabledAsync(string token, string login)
+    {
+        long id = await GetWorkflowIdAsync(token, login);
+        if (id < 0) return false;
+        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/workflows/{id}", token);
+        if (!resp.IsSuccessStatusCode) return false;
+        var json = await resp.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("state", out var s) && s.ValueKind == JsonValueKind.String && s.GetString() == "active";
     }
 
     // ---------- 内部 ----------
