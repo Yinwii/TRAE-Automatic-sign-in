@@ -4,7 +4,7 @@ namespace TraeCheckin;
 /// 主界面：深色侧边栏 + 蓝色强调 + 浅色内容区。
 /// 固定小窗（不可缩放），左侧导航可切换「仪表盘 / 签到记录 / 设置」。
 /// </summary>
-public class MainForm : Form
+public partial class MainForm : Form
 {
     private static readonly Color SidebarBg = Color.FromArgb(30, 41, 59);      // #1E293B
     private static readonly Color Accent = Color.FromArgb(59, 130, 246);       // #3B82F6
@@ -125,10 +125,11 @@ public class MainForm : Form
         header.Controls.Add(subtitle);
         header.Controls.Add(title);
 
-        var nav = new Panel { Dock = DockStyle.Top, Height = 150, BackColor = SidebarBg, Padding = new Padding(0, 14, 0, 0) };
+        var nav = new Panel { Dock = DockStyle.Top, Height = 200, BackColor = SidebarBg, Padding = new Padding(0, 14, 0, 0) };
         _navItems.Add(NavItem("仪表盘", 0));
         _navItems.Add(NavItem("签到记录", 1));
-        _navItems.Add(NavItem("设置", 2));
+        _navItems.Add(NavItem("云端签到", 2));
+        _navItems.Add(NavItem("设置", 3));
         for (int i = _navItems.Count - 1; i >= 0; i--)
             nav.Controls.Add(_navItems[i]);
 
@@ -193,6 +194,7 @@ public class MainForm : Form
         var host = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg };
         _pages.Add(BuildDashboard());
         _pages.Add(BuildHistory());
+        _pages.Add(BuildCloud());
         _pages.Add(BuildSettings());
         foreach (var pg in _pages)
         {
@@ -592,15 +594,37 @@ public class MainForm : Form
         {
             var st = await _api.GetStatusAsync(_config.Token);
             if (st != null && st.code == 0) return st;
-            SetLog("token 已失效，尝试重新获取…");
+            SetLog("token 已失效，尝试用会话 Cookie 静默换新…");
         }
+
+        // 优先用 X-Cloudide-Session（约 14 天有效）静默换新 token，避免频繁重新登录
+        if (!string.IsNullOrEmpty(_config.Session))
+        {
+            var renewed = await _api.GetUserTokenAsync(_config.Session);
+            if (!string.IsNullOrEmpty(renewed))
+            {
+                _config.Token = renewed;
+                _config.TokenUpdatedAt = DateTime.Now;
+                _config.Save();
+                SetLog("token 已通过会话 Cookie 静默换新。");
+                UpdateTokenDisplay();
+                var st = await _api.GetStatusAsync(renewed);
+                if (st != null && st.code == 0) return st;
+            }
+            else
+            {
+                SetLog("会话 Cookie 已失效：" + (_api.LastError ?? "未知错误"));
+            }
+        }
+
         return await LoginAndRefreshAsync();
     }
 
     private async Task<CheckinStatus?> LoginAndRefreshAsync()
     {
         string token = string.Empty;
-        using (var login = new LoginForm(_userDataDir, _config.Token, t => token = t))
+        string? session = null;
+        using (var login = new LoginForm(_userDataDir, _config.Token, (t, s) => { token = t; session = s; }))
             login.ShowDialog();
         if (string.IsNullOrEmpty(token))
         {
@@ -608,6 +632,7 @@ public class MainForm : Form
             return null;
         }
         _config.Token = token;
+        if (!string.IsNullOrEmpty(session)) _config.Session = session;
         _config.TokenUpdatedAt = DateTime.Now;
         _config.Save();
         SetLog("登录成功，token 已保存。");

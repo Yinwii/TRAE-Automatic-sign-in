@@ -66,6 +66,37 @@ public class TraeApiClient
         return await SendAsync<CheckinStatus>(req);
     }
 
+    /// <summary>
+    /// 用 X-Cloudide-Session 会话 Cookie 换取全新 JWT（网页端续期接口）。
+    /// 该接口仅需 Cookie 认证，无需 Authorization 头，返回 8 小时有效的新 token。
+    /// </summary>
+    public async Task<string?> GetUserTokenAsync(string session)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/cloudide/api/v3/common/GetUserToken");
+            req.Headers.TryAddWithoutValidation("Cookie", "X-Cloudide-Session=" + session);
+            req.Headers.TryAddWithoutValidation("Referer", "https://www.trae.cn/");
+            req.Headers.TryAddWithoutValidation("Origin", "https://www.trae.cn");
+            using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            var json = await resp.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("Result", out var result) &&
+                result.TryGetProperty("Token", out var tok) &&
+                tok.ValueKind == JsonValueKind.String)
+            {
+                return tok.GetString();
+            }
+            LastError = "GetUserToken 响应缺少 Result.Token";
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.Message;
+            return null;
+        }
+    }
+
     /// <summary>查询剩余积分（汇总所有资格包的剩余额度）。</summary>
     public async Task<double> GetRemainingCreditsAsync(string token)
     {

@@ -19,6 +19,7 @@
 - **开机自启动**：可设置登录 Windows 后自动启动本程序。
 - **Token 查看与复制**：设置页显示当前 token 及最后更新时间，支持一键复制。
 - **内嵌登录**：首次使用 WebView2 内嵌浏览器登录一次，登录态自动保存，后续无需重复登录。
+- **云端自动签到（GitHub Actions）**：可一键把签到脚本部署到自己的 GitHub 仓库，无需本机挂机，由 GitHub 每天定时自动签到。
 - **单实例运行**：仅允许启动一个实例，再次点击图标会自动唤起已运行的窗口。
 - **启动器依赖检查**：独立启动器（自包含，无需 .NET）启动时自动检测 .NET 9 桌面运行时与 WebView2 Runtime，缺失时自动补全或引导安装。
 
@@ -61,6 +62,9 @@
 | `AppConfig.cs` | 本地配置的加载与保存 |
 | `AutoStartManager.cs` | 开机自启动（注册表 Run 键） |
 | `TokenUtils.cs` | 登录 token 判定（避免误读失效 token） |
+| `GitHubApiClient.cs` | GitHub 设备码授权与云端部署 API 客户端 |
+| `GitHubSecret.cs` | GitHub Actions secret 加密（libsodium） |
+| `MainForm.Cloud.cs` | 「云端签到」页（授权与一键部署） |
 
 ---
 
@@ -129,15 +133,38 @@ dotnet publish TraeCheckin.Launcher\TraeCheckin.Launcher.csproj -c Release
 
 ---
 
+## 云端签到部署（GitHub Actions）
+
+除本机自动签到外，程序还支持把签到脚本部署到你的 GitHub 仓库，由 GitHub Actions 每天定时自动签到，**无需本机 24 小时挂机**。
+
+### 部署流程
+
+1. 在「云端签到」页点击「授权 GitHub」，走 **OAuth 设备码授权**拿到 access_token。
+2. 再点「一键部署到云端」，程序自动完成：
+   - fork 源仓库（若你已是源仓库 owner 则自动跳过）；
+   - 写入 `TRAE_SESSION` 与 `TRAE_DEVICE_ID` 两个 Actions secret；
+   - 启用定时 workflow；
+   - 触发一次验证运行并等待结果。
+3. 部署成功后，GitHub 每天 **北京时间 8:00**（cron `0 0 * * *`）自动执行签到。
+
+云端脚本 [checkin.py](checkin.py) 用 `X-Cloudide-Session` Cookie 换取全新 JWT 后执行签到，workflow 定义见 [checkin.yml](.github/workflows/checkin.yml)。
+
+### 注意事项
+
+- 云端签到的凭证是 `TRAE_SESSION`（约 **14 天**有效）。过期后需回到本程序重新登录 Trae，再点一次「一键部署到云端」刷新 secret。
+- 首次部署需要 GitHub OAuth 授权；授权信息（access_token 与用户名）保存在本地配置中，不会写入云端仓库。
+
+---
+
 ## 配置文件位置
 
 | 内容 | 路径 |
 |------|------|
-| 配置（token、自动签到设置） | `%APPDATA%\TraeCheckin\config.json` |
+| 配置（token、Session、GitHub 授权、自动签到设置） | `%APPDATA%\TraeCheckin\config.json` |
 | 签到历史 | `%APPDATA%\TraeCheckin\history.txt` |
 | WebView2 用户数据 | `%LOCALAPPDATA%\TraeCheckin\WebView` |
 
-> ⚠️ **安全提示**：`config.json` 中保存着你的登录 token。请勿将本项目中的 `config.json` 提交到任何公开仓库，或分享给他人。
+> ⚠️ **安全提示**：`config.json` 中保存着你的登录 token 与 GitHub 授权信息。请勿将本项目中的 `config.json` 提交到任何公开仓库，或分享给他人。
 
 ---
 

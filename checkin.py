@@ -75,6 +75,7 @@ def main():
     device_id = os.environ.get("TRAE_DEVICE_ID", "").strip()
     if not device_id:
         device_id = str(random.randint(10**15, 10**16 - 1))
+    print("device_id=%s" % device_id)
 
     try:
         token = get_token(session)

@@ -9,7 +9,13 @@ namespace TraeCheckin;
 public class AppConfig
 {
     public string? Token { get; set; }
+    /// <summary>X-Cloudide-Session 会话 Cookie 值（约 14 天有效），用于 token 失效时静默换新。</summary>
+    public string? Session { get; set; }
     public DateTime? TokenUpdatedAt { get; set; }
+    /// <summary>GitHub OAuth 设备码授权得到的 access_token（用于云端自动签到部署）。</summary>
+    public string? GitHubToken { get; set; }
+    /// <summary>GitHub 授权后的登录用户名（fork 目标 owner）。</summary>
+    public string? GitHubLogin { get; set; }
     public string DeviceId { get; set; } = GenerateDeviceId();
     public bool AutoCheckinEnabled { get; set; } = true;
     public string AutoCheckinTime { get; set; } = "08:00";

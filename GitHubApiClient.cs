@@ -1,0 +1,241 @@
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace TraeCheckin;
+
+/// <summary>设备码授权请求返回的 code 信息（snake_case 字段映射）。</summary>
+public class GitHubDeviceCode
+{
+    [JsonPropertyName("device_code")] public string DeviceCode { get; set; } = "";
+    [JsonPropertyName("user_code")] public string UserCode { get; set; } = "";
+    [JsonPropertyName("verification_uri")] public string VerificationUri { get; set; } = "";
+    [JsonPropertyName("interval")] public int Interval { get; set; } = 5;
+}
+
+/// <summary>设备码授权轮询结果。</summary>
+public enum DeviceAuthState
+{
+    Pending,   // 用户尚未在网页完成授权，继续轮询
+    Success,   // 已拿到 access_token
+    Failed     // 授权被拒绝或过期
+}
+
+/// <summary>
+/// GitHub API 客户端：封装设备码授权（Device Flow）与云端自动签到部署所需的
+/// fork / 写 secret / 启用 workflow / 触发 workflow 等 REST 接口。
+/// </summary>
+public class GitHubApiClient
+{
+    private const string ClientId = "Ov23lix0Kb9ldJHrOpKv";
+    private const string SourceOwner = "star620";
+    private const string SourceRepo = "TRAE-Automatic-sign-in";
+    public const string SessionSecretName = "TRAE_SESSION";
+    public const string DeviceIdSecretName = "TRAE_DEVICE_ID";
+    private const string WorkflowPath = ".github/workflows/checkin.yml";
+
+    private readonly HttpClient _http;
+
+    public string? LastError { get; private set; }
+
+    public GitHubApiClient()
+    {
+        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4");
+        _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+    }
+
+    // ---------- 设备码授权 ----------
+
+    /// <summary>向 GitHub 申请设备码，返回需要展示给用户的 user_code 与验证地址。</summary>
+    public async Task<GitHubDeviceCode?> RequestDeviceCodeAsync()
+    {
+        try
+        {
+            var body = JsonSerializer.Serialize(new { client_id = ClientId, scope = "repo workflow" });
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://github.com/login/device/code");
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req);
+            var json = await resp.Content.ReadAsStringAsync();
+            if (!resp.IsSuccessStatusCode)
+            {
+                LastError = $"申请设备码失败：HTTP {(int)resp.StatusCode} {json}";
+                return null;
+            }
+            return JsonSerializer.Deserialize<GitHubDeviceCode>(json);
+        }
+        catch (Exception ex) { LastError = ex.Message; return null; }
+    }
+
+    /// <summary>轮询设备码授权结果。Pending 表示继续等待，Success 返回 token，Failed 表示已失败。</summary>
+    public async Task<(DeviceAuthState State, string? Token)> PollForAccessTokenAsync(string deviceCode)
+    {
+        try
+        {
+            var body = JsonSerializer.Serialize(new
+            {
+                client_id = ClientId,
+                device_code = deviceCode,
+                grant_type = "urn:ietf:params:oauth:grant-type:device_code"
+            });
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://github.com/login/oauth/access_token");
+            req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+            using var resp = await _http.SendAsync(req);
+            var json = await resp.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("access_token", out var tok) && tok.ValueKind == JsonValueKind.String)
+                return (DeviceAuthState.Success, tok.GetString());
+
+            var err = doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "unknown";
+            if (err == "authorization_pending" || err == "slow_down") return (DeviceAuthState.Pending, null);
+            LastError = "授权失败：" + err;
+            return (DeviceAuthState.Failed, null);
+        }
+        catch (Exception ex)
+        {
+            LastError = ex.Message;
+            return (DeviceAuthState.Failed, null);
+        }
+    }
+
+    /// <summary>用 access_token 获取当前登录用户名。</summary>
+    public async Task<string?> GetLoginAsync(string token)
+    {
+        using var resp = await SendApiAsync(HttpMethod.Get, "/user", token);
+        var json = await resp.Content.ReadAsStringAsync();
+        if (!resp.IsSuccessStatusCode)
+        {
+            LastError = $"获取用户信息失败：HTTP {(int)resp.StatusCode} {json}";
+            return null;
+        }
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.TryGetProperty("login", out var login) ? login.GetString() : null;
+    }
+
+    // ---------- 部署流程 ----------
+
+    /// <summary>fork 源仓库到当前用户账号，并轮询直到 fork 完成。</summary>
+    public async Task<bool> ForkAsync(string token, string login)
+    {
+        // 源仓库 owner 自己部署时无需 fork（GitHub 不允许 fork 自己的仓库）
+        if (string.Equals(login, SourceOwner, StringComparison.OrdinalIgnoreCase))
+            return true;
+        try
+        {
+            using var resp = await SendApiAsync(HttpMethod.Post, $"/repos/{SourceOwner}/{SourceRepo}/forks", token);
+            if (resp.StatusCode != System.Net.HttpStatusCode.Accepted && !resp.IsSuccessStatusCode)
+            {
+                LastError = $"fork 失败：HTTP {(int)resp.StatusCode}";
+                return false;
+            }
+            for (int i = 0; i < 30; i++)
+            {
+                await Task.Delay(2000);
+                using var check = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}", token);
+                if (check.IsSuccessStatusCode) return true;
+            }
+            LastError = "fork 超时未完成";
+            return false;
+        }
+        catch (Exception ex) { LastError = ex.Message; return false; }
+    }
+
+    /// <summary>用仓库公开密钥加密后，把 secret 写入仓库的指定 Actions secret。</summary>
+    public async Task<bool> SetSecretAsync(string token, string login, string secretName, string secretValue)
+    {
+        try
+        {
+            using var pkResp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/secrets/public-key", token);
+            var pkJson = await pkResp.Content.ReadAsStringAsync();
+            if (!pkResp.IsSuccessStatusCode)
+            {
+                LastError = $"获取公开密钥失败：HTTP {(int)pkResp.StatusCode}";
+                return false;
+            }
+            using var doc = JsonDocument.Parse(pkJson);
+            string? key = doc.RootElement.TryGetProperty("key", out var k) ? k.GetString() : null;
+            string? keyId = doc.RootElement.TryGetProperty("key_id", out var id) ? id.GetString() : null;
+            if (key == null || keyId == null)
+            {
+                LastError = "公开密钥响应缺少 key/key_id";
+                return false;
+            }
+
+            var encrypted = GitHubSecret.Encrypt(secretValue, key);
+            var body = JsonSerializer.Serialize(new { encrypted_value = encrypted, key_id = keyId });
+            using var resp = await SendApiAsync(HttpMethod.Put, $"/repos/{login}/{SourceRepo}/actions/secrets/{secretName}", token, body);
+            if (resp.IsSuccessStatusCode) return true;
+            LastError = $"写入 secret 失败：HTTP {(int)resp.StatusCode}";
+            return false;
+        }
+        catch (Exception ex) { LastError = ex.Message; return false; }
+    }
+
+    /// <summary>查找 checkin.yml 对应的 workflow id。</summary>
+    public async Task<long> GetWorkflowIdAsync(string token, string login)
+    {
+        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/workflows", token);
+        var json = await resp.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("workflows", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var wf in arr.EnumerateArray())
+            {
+                if (wf.TryGetProperty("path", out var p) && p.GetString() == WorkflowPath &&
+                    wf.TryGetProperty("id", out var id) && id.TryGetInt64(out var v))
+                    return v;
+            }
+        }
+        LastError = "未找到 workflow：" + WorkflowPath;
+        return -1;
+    }
+
+    /// <summary>启用 workflow（fork 后定时任务默认禁用，需手动启用）。</summary>
+    public async Task<bool> EnableWorkflowAsync(string token, string login, long workflowId)
+    {
+        using var resp = await SendApiAsync(HttpMethod.Put, $"/repos/{login}/{SourceRepo}/actions/workflows/{workflowId}/enable", token);
+        if (resp.IsSuccessStatusCode) return true;
+        LastError = $"启用 workflow 失败：HTTP {(int)resp.StatusCode}";
+        return false;
+    }
+
+    /// <summary>手动触发一次 workflow（用于立即验证）。</summary>
+    public async Task<bool> DispatchWorkflowAsync(string token, string login, long workflowId)
+    {
+        var body = JsonSerializer.Serialize(new { @ref = "main" });
+        using var resp = await SendApiAsync(HttpMethod.Post, $"/repos/{login}/{SourceRepo}/actions/workflows/{workflowId}/dispatches", token, body);
+        if (resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.NoContent) return true;
+        LastError = $"触发 workflow 失败：HTTP {(int)resp.StatusCode}";
+        return false;
+    }
+
+    /// <summary>获取最新一次 workflow run 的结论（success/failure/null）。</summary>
+    public async Task<string?> GetLatestRunConclusionAsync(string token, string login)
+    {
+        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/runs?per_page=1", token);
+        var json = await resp.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("workflow_runs", out var arr) && arr.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var run in arr.EnumerateArray())
+            {
+                if (run.TryGetProperty("conclusion", out var c) && c.ValueKind == JsonValueKind.String)
+                    return c.GetString();
+                if (run.TryGetProperty("status", out var s) && s.GetString() != "completed")
+                    return null; // 尚未完成
+            }
+        }
+        return null;
+    }
+
+    // ---------- 内部 ----------
+
+    private async Task<HttpResponseMessage> SendApiAsync(HttpMethod method, string path, string token, string? body = null)
+    {
+        using var req = new HttpRequestMessage(method, "https://api.github.com" + path);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        if (body != null) req.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        return await _http.SendAsync(req);
+    }
+}

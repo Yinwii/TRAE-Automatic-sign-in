@@ -13,11 +13,11 @@ public class LoginForm : Form
     private readonly string _userDataDir;
     private readonly string? _initialToken;
     private WebView2? _webView;
-    private readonly Action<string> _onToken;
+    private readonly Action<string, string?> _onToken;
     private bool _tokenObtained;
     private readonly Button _btnClose = new();
 
-    public LoginForm(string userDataDir, string? initialToken, Action<string> onToken)
+    public LoginForm(string userDataDir, string? initialToken, Action<string, string?> onToken)
     {
         _userDataDir = userDataDir;
         _initialToken = initialToken;
@@ -56,7 +56,7 @@ public class LoginForm : Form
             // 用户关闭窗口时直接结束进程，避免残留 token 读取线程
             if (!_tokenObtained)
             {
-                _onToken(string.Empty);
+                _onToken(string.Empty, null);
             }
         };
     }
@@ -82,7 +82,7 @@ public class LoginForm : Form
         catch (Exception ex)
         {
             MessageBox.Show("初始化浏览器失败：" + ex.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            _onToken(string.Empty);
+            _onToken(string.Empty, null);
             Close();
         }
     }
@@ -103,8 +103,25 @@ public class LoginForm : Form
             // 仅接受真正重新登录产生的新 token，避免误读 localStorage 中残留的失效 token
             if (!TokenUtils.ShouldAcceptNewToken(_initialToken, token)) return;
 
+            // 通过 CookieManager 读取会话 Cookie（HttpOnly，localStorage 取不到）。
+            // X-Cloudide-Session 约 14 天有效，是 token 失效时静默换新的凭证。
+            string? session = null;
+            try
+            {
+                var cookies = await _webView.CoreWebView2.CookieManager.GetCookiesAsync("https://www.trae.cn/");
+                foreach (var c in cookies)
+                {
+                    if (c.Name == "X-Cloudide-Session")
+                    {
+                        session = c.Value;
+                        break;
+                    }
+                }
+            }
+            catch { /* 读取 Cookie 失败时保持 session 为 null，仍可继续登录 */ }
+
             _tokenObtained = true;
-            _onToken(token);
+            _onToken(token, session);
             Close();
         }
         catch { /* 页面尚未就绪，等待下个时钟周期 */ }
