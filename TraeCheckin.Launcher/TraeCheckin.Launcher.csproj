@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>TraeCheckin.Launcher</AssemblyName>
+    <RootNamespace>TraeCheckin.Launcher</RootNamespace>
+    <Version>1.4.0</Version>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <PublishTrimmed>true</PublishTrimmed>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationIcon>..\app.ico</ApplicationIcon>
+    <!-- 统一构建产物输出目录：启动器单文件发布到这里，与主程序同目录 -->
+    <PublishDir>C:\Users\星梦\Desktop\插件开发\TraeCheckin开发\</PublishDir>
+  </PropertyGroup>
+
+</Project>

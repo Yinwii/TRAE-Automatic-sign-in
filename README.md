@@ -19,6 +19,8 @@
 - **开机自启动**：可设置登录 Windows 后自动启动本程序。
 - **Token 查看与复制**：设置页显示当前 token 及最后更新时间，支持一键复制。
 - **内嵌登录**：首次使用 WebView2 内嵌浏览器登录一次，登录态自动保存，后续无需重复登录。
+- **单实例运行**：仅允许启动一个实例，再次点击图标会自动唤起已运行的窗口。
+- **启动器依赖检查**：独立启动器（自包含，无需 .NET）启动时自动检测 .NET 9 桌面运行时与 WebView2 Runtime，缺失时自动补全或引导安装。
 
 ---
 
@@ -109,11 +111,21 @@ x-device-id: <设备号>
 ### 构建
 
 ```bash
-# 在项目目录下执行
+# 1. 编译主程序（框架依赖，输出到统一产物目录）
 dotnet build TraeCheckin.csproj -c Release
+
+# 2. 发布独立启动器（自包含单文件，输出到同一目录）
+dotnet publish TraeCheckin.Launcher\TraeCheckin.Launcher.csproj -c Release
 ```
 
-生成的可执行文件位于 `bin/Release/net9.0-windows/TraeCheckin.exe`。
+主程序与启动器的构建产物统一输出到 `TraeCheckin开发\` 目录，主要文件：
+
+| 文件 | 说明 |
+|------|------|
+| `TraeCheckin.exe` | 主程序（需 .NET 9 桌面运行时） |
+| `TraeCheckin.Launcher.exe` | 独立启动器（自包含，自动检测/补全依赖） |
+
+日常使用建议双击 `TraeCheckin.Launcher.exe`，它会自动检查 .NET 9 与 WebView2 运行时，缺失时自动补全，再拉起主程序。
 
 ---
 

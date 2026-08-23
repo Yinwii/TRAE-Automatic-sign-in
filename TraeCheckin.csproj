@@ -8,9 +8,12 @@
     <Nullable>enable</Nullable>
     <AssemblyName>TraeCheckin</AssemblyName>
     <RootNamespace>TraeCheckin</RootNamespace>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- 统一构建产物输出目录（主程序 + 启动器都输出到这里） -->
+    <OutputPath>C:\Users\星梦\Desktop\插件开发\TraeCheckin开发\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +26,14 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="TraeCheckin.Tests" />
+  </ItemGroup>
+
+  <!-- 排除启动器子项目，避免主项目默认 glob 把它的源码和 obj 中间文件一起编译进来 -->
+  <ItemGroup>
+    <Compile Remove="TraeCheckin.Launcher\**" />
+    <EmbeddedResource Remove="TraeCheckin.Launcher\**" />
+    <Content Remove="TraeCheckin.Launcher\**" />
+    <None Remove="TraeCheckin.Launcher\**" />
   </ItemGroup>
 
 </Project>
