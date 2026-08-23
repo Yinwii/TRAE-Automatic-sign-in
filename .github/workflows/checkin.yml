@@ -24,4 +24,5 @@ jobs:
       - name: Run checkin
         env:
           TRAE_SESSION: ${{ secrets.TRAE_SESSION }}
+          TRAE_DEVICE_ID: ${{ secrets.TRAE_DEVICE_ID }}
         run: python checkin.py
