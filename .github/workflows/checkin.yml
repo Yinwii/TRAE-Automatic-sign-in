@@ -1,0 +1,27 @@
+name: Trae Daily Checkin
+
+on:
+  schedule:
+    # 北京时间每天 08:00（UTC 00:00）
+    - cron: "0 0 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run checkin
+        env:
+          TRAE_SESSION: ${{ secrets.TRAE_SESSION }}
+        run: python checkin.py
