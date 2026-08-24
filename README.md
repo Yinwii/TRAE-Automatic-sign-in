@@ -65,6 +65,8 @@
 | `GitHubApiClient.cs` | GitHub 设备码授权与云端部署 API 客户端 |
 | `GitHubSecret.cs` | GitHub Actions secret 加密（libsodium） |
 | `MainForm.Cloud.cs` | 「云端签到」页（授权与一键部署） |
+| `FeishuNotifier.cs` | 飞书机器人推送（签到结果通知） |
+| `HistoryChart.cs` | 总积分趋势折线图控件 |
 
 ---
 
@@ -142,7 +144,7 @@ dotnet publish TraeCheckin.Launcher\TraeCheckin.Launcher.csproj -c Release
 1. 在「云端签到」页点击「授权 GitHub」，走 **OAuth 设备码授权**拿到 access_token。
 2. 再点「一键部署到云端」，程序自动完成：
    - fork 源仓库（若你已是源仓库 owner 则自动跳过）；
-   - 写入 `TRAE_SESSION` 与 `TRAE_DEVICE_ID` 两个 Actions secret；
+   - 写入 `TRAE_SESSION` 与 `TRAE_DEVICE_ID` 两个 Actions secret（若已在设置页配置飞书推送，还会写入 `FEISHU_WEBHOOK`）；
    - 启用定时 workflow；
    - 触发一次验证运行并等待结果。
 3. 部署成功后，GitHub 每天 **北京时间 8:00**（cron `0 0 * * *`）自动执行签到。
@@ -156,12 +158,25 @@ dotnet publish TraeCheckin.Launcher\TraeCheckin.Launcher.csproj -c Release
 
 ---
 
+## 签到结果推送（飞书）
+
+可在「设置」页粘贴飞书自定义机器人的 webhook 地址，签到成功/失败后主动推送到飞书群：
+
+1. 在飞书群中添加「自定义机器人」，复制它的 webhook 地址。
+2. 在本程序「设置」页粘贴到「签到结果推送」输入框，点「保存」，再点「测试推送」验证。
+3. 部署云端时若已配置 webhook，会一并写入 `FEISHU_WEBHOOK` secret，云端签到同样会推送。
+
+> 注意：飞书机器人安全设置建议选「自定义关键词」或关闭「签名校验」；本程序当前实现的是不带签名的文本消息推送。
+
+---
+
 ## 配置文件位置
 
 | 内容 | 路径 |
 |------|------|
-| 配置（token、Session、GitHub 授权、自动签到设置） | `%APPDATA%\TraeCheckin\config.json` |
+| 配置（token、Session、GitHub 授权、飞书 webhook、自动签到设置） | `%APPDATA%\TraeCheckin\config.json` |
 | 签到历史 | `%APPDATA%\TraeCheckin\history.txt` |
+| 总积分趋势数据 | `%APPDATA%\TraeCheckin\credits_total.txt` |
 | WebView2 用户数据 | `%LOCALAPPDATA%\TraeCheckin\WebView` |
 
 > ⚠️ **安全提示**：`config.json` 中保存着你的登录 token 与 GitHub 授权信息。请勿将本项目中的 `config.json` 提交到任何公开仓库，或分享给他人。

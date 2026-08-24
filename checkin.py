@@ -18,6 +18,7 @@ Trae 每日签到脚本（GitHub Actions 版）
   python checkin.py
 """
 
+import datetime
 import json
 import os
 import random
@@ -66,6 +67,24 @@ def checkin(token: str, device_id: str) -> dict:
         return {"http": status, "body": {"raw": text}}
 
 
+def notify_feishu(webhook, text):
+    """向飞书机器人推送一条文本消息；webhook 为空则跳过。返回 HTTP 状态码，失败返回 None。"""
+    if not webhook:
+        return None
+    try:
+        payload = json.dumps({"msg_type": "text", "content": {"text": text}}).encode("utf-8")
+        req = urllib.request.Request(webhook, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return resp.status
+    except Exception:
+        return None
+
+
+def beijing_now_str():
+    """返回北京时间字符串（GitHub Actions 运行在 UTC，需 +8 小时）。"""
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def main():
     session = os.environ.get("TRAE_SESSION", "").strip()
     if not session:
@@ -76,6 +95,8 @@ def main():
     if not device_id:
         device_id = str(random.randint(10**15, 10**16 - 1))
     print("device_id=%s" % device_id)
+
+    webhook = os.environ.get("FEISHU_WEBHOOK", "").strip()
 
     try:
         token = get_token(session)
@@ -88,6 +109,14 @@ def main():
         # 判定失败：HTTP 非 200 或 code 非 0 且非「已签到」
         code = body.get("code", -1)
         checked = body.get("checked_in", False)
+        success = (result["http"] == 200) and (code == 0 or checked)
+
+        credits = body.get("credits", 0)
+        if success:
+            notify_feishu(webhook, "✅ Trae 签到成功\n本次获得：%s 积分\n时间：%s" % (credits, beijing_now_str()))
+        else:
+            notify_feishu(webhook, "⚠️ Trae 签到失败，请检查会话是否过期\n时间：%s" % beijing_now_str())
+
         if result["http"] != 200:
             sys.exit(1)
         if code != 0 and not checked:
@@ -95,6 +124,7 @@ def main():
         print("签到完成")
     except Exception as e:
         print("签到异常: %s" % e)
+        notify_feishu(webhook, "⚠️ Trae 签到异常：%s" % e)
         sys.exit(1)
 
 

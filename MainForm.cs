@@ -26,6 +26,9 @@ public partial class MainForm : Form
     private readonly Label _lblRemaining = new() { Font = new Font("Segoe UI", 28, FontStyle.Bold) };
     private readonly Label _lblStatus = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
     private readonly Label _lblReward = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
+    private readonly Label _lblStreak = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
+    private readonly Label _lblCloudStatus = new() { Font = new Font("Segoe UI", 13, FontStyle.Bold) };
+    private readonly HistoryChart _chart = new();
     private readonly ListBox _log = new();
 
     // 设置页（独立控件，避免跨页共享导致显示异常）
@@ -36,6 +39,9 @@ public partial class MainForm : Form
     // Token 信息（设置页）
     private readonly TextBox _txtToken = new();
     private readonly Label _lblTokenTime = new();
+
+    // 飞书通知（设置页）
+    private readonly TextBox _txtWebhook = new();
 
     private readonly Button _btnCheckin = new() { Font = new Font("Segoe UI", 12, FontStyle.Bold), Height = 44 };
 
@@ -49,6 +55,9 @@ public partial class MainForm : Form
 
     private static string HistoryPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "history.txt");
+
+    private static string TotalHistoryPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "credits_total.txt");
 
     private static readonly Icon AppIcon = LoadAppIcon();
 
@@ -71,7 +80,7 @@ public partial class MainForm : Form
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TraeCheckin", "WebView");
 
         Text = "Trae 每日签到助手";
-        ClientSize = new Size(820, 640);
+        ClientSize = new Size(900, 720);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = true;
@@ -211,16 +220,17 @@ public partial class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 2,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = ContentBg,
             Padding = Padding.Empty,
             Margin = Padding.Empty
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        // 剩余积分(130) | 状态/奖励(100) | 日志(剩余)
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 130));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 190));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         // 剩余积分（跨两列）
@@ -243,6 +253,25 @@ public partial class MainForm : Form
         _lblReward.Dock = DockStyle.Fill;
         root.Controls.Add(rewardCard, 1, 1);
 
+        // 连续签到天数
+        var streakCard = Card("连续签到", _lblStreak);
+        _lblStreak.TextAlign = ContentAlignment.MiddleLeft;
+        _lblStreak.Dock = DockStyle.Fill;
+        _lblStreak.ForeColor = Accent;
+        root.Controls.Add(streakCard, 0, 2);
+
+        // 云端签到状态
+        var cloudCard = Card("云端签到状态", _lblCloudStatus);
+        _lblCloudStatus.TextAlign = ContentAlignment.MiddleLeft;
+        _lblCloudStatus.Dock = DockStyle.Fill;
+        root.Controls.Add(cloudCard, 1, 2);
+
+        // 积分趋势图（跨两列）
+        _chart.Dock = DockStyle.Fill;
+        var chartCard = Card("积分趋势（近 14 天）", _chart);
+        root.Controls.Add(chartCard, 0, 3);
+        root.SetColumnSpan(chartCard, 2);
+
         // 日志
         _log.Dock = DockStyle.Fill;
         _log.BackColor = CardBg;
@@ -250,7 +279,7 @@ public partial class MainForm : Form
         _log.BorderStyle = BorderStyle.None;
         _log.HorizontalScrollbar = false;
         var logCard = Card("运行日志", _log);
-        root.Controls.Add(logCard, 0, 2);
+        root.Controls.Add(logCard, 0, 4);
         root.SetColumnSpan(logCard, 2);
 
         p.Controls.Add(root);
@@ -282,11 +311,12 @@ public partial class MainForm : Form
     private Panel BuildSettings()
     {
         var p = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg, Padding = new Padding(16) };
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5, BackColor = ContentBg };
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, BackColor = ContentBg };
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var autoPanel = CardPanel("每日自动签到", BuildAutoRow());
@@ -301,6 +331,9 @@ public partial class MainForm : Form
         var acctPanel = CardPanel("账号", BuildAccountRow());
         grid.Controls.Add(acctPanel, 0, 3);
 
+        var notifyPanel = CardPanel("签到结果推送（飞书机器人）", BuildWebhookRow());
+        grid.Controls.Add(notifyPanel, 0, 4);
+
         var hint = new Label
         {
             Text = "提示：本程序固定小窗显示。关闭窗口后自动最小化到系统托盘，后台继续自动签到。",
@@ -309,7 +342,7 @@ public partial class MainForm : Form
             Font = new Font("Segoe UI", 9),
             Padding = new Padding(4, 12, 0, 0)
         };
-        grid.Controls.Add(hint, 0, 4);
+        grid.Controls.Add(hint, 0, 5);
 
         p.Controls.Add(grid);
         return p;
@@ -452,6 +485,52 @@ public partial class MainForm : Form
         return row;
     }
 
+    private Control BuildWebhookRow()
+    {
+        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = CardBg };
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+        table.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+
+        _txtWebhook.Text = _config.FeishuWebhook ?? "";
+        _txtWebhook.Dock = DockStyle.Fill;
+        _txtWebhook.Margin = new Padding(0, 4, 10, 4);
+        _txtWebhook.PlaceholderText = "粘贴飞书机器人 webhook 地址（留空则关闭推送）";
+
+        var btnSave = new Button { Text = "保存", Dock = DockStyle.Fill, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, Cursor = Cursors.Hand };
+        btnSave.FlatAppearance.BorderSize = 0;
+        btnSave.Click += (_, _) => SaveWebhook();
+
+        var btnTest = new Button { Text = "测试推送", Dock = DockStyle.Fill, Margin = new Padding(0, 4, 0, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        btnTest.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
+        btnTest.Click += async (_, _) => await TestWebhookAsync();
+
+        table.Controls.Add(_txtWebhook, 0, 0);
+        table.Controls.Add(btnSave, 1, 0);
+        table.Controls.Add(btnTest, 2, 0);
+        return table;
+    }
+
+    private void SaveWebhook()
+    {
+        var url = _txtWebhook.Text.Trim();
+        _config.FeishuWebhook = string.IsNullOrEmpty(url) ? null : url;
+        _config.Save();
+        SetLog("飞书 webhook 已保存。");
+    }
+
+    private async Task TestWebhookAsync()
+    {
+        var url = _txtWebhook.Text.Trim();
+        if (string.IsNullOrEmpty(url))
+        {
+            MessageBox.Show("请先粘贴飞书机器人 webhook 地址。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var ok = await FeishuNotifier.SendTextAsync(url, "Trae 签到助手测试通知：如果你看到这条消息，说明推送配置成功。");
+        SetLog(ok ? "测试消息已发送，请查看飞书群。" : "测试消息发送失败，请检查 webhook 地址是否正确。");
+    }
+
     private Panel CardPanel(string title, Control body)
     {
         var p = new Panel { Dock = DockStyle.Fill, BackColor = CardBg, Padding = new Padding(16, 12, 16, 6), Margin = new Padding(0, 0, 0, 10) };
@@ -558,6 +637,75 @@ public partial class MainForm : Form
             _lblReward.Text = status.credits > 0 ? $"{status.credits:0} 积分" : "—";
         }
         else _lblStatus.Text = "获取失败";
+
+        // 每天首次刷新时记录当前总积分，便于趋势图立即有数据
+        if (remaining >= 0 && !TotalHistoryHasToday())
+            AppendTotalHistory(DateTime.Now, remaining);
+
+        await RefreshCloudStatusAsync();
+    }
+
+    /// <summary>刷新仪表盘的云端签到状态（读取最近一次 GitHub Actions 运行结论）。</summary>
+    private async Task RefreshCloudStatusAsync()
+    {
+        if (string.IsNullOrEmpty(_config.GitHubToken))
+        {
+            _lblCloudStatus.Text = "未部署";
+            _lblCloudStatus.ForeColor = TextMuted;
+            return;
+        }
+        try
+        {
+            string login = _config.GitHubLogin ?? "";
+            if (string.IsNullOrEmpty(login))
+            {
+                login = await _ghApi.GetLoginAsync(_config.GitHubToken) ?? "";
+                if (!string.IsNullOrEmpty(login))
+                {
+                    _config.GitHubLogin = login;
+                    _config.Save();
+                }
+            }
+            if (string.IsNullOrEmpty(login))
+            {
+                _lblCloudStatus.Text = "未部署";
+                _lblCloudStatus.ForeColor = TextMuted;
+                return;
+            }
+
+            var run = await _ghApi.GetLatestRunAsync(_config.GitHubToken, login);
+            if (run == null)
+            {
+                _lblCloudStatus.Text = "未部署";
+                _lblCloudStatus.ForeColor = TextMuted;
+                return;
+            }
+            if (run.Conclusion == "success")
+            {
+                _lblCloudStatus.Text = "最近成功 ✓";
+                _lblCloudStatus.ForeColor = Color.FromArgb(16, 185, 129);
+            }
+            else if (run.Conclusion == "failure")
+            {
+                _lblCloudStatus.Text = "最近失败 ✗";
+                _lblCloudStatus.ForeColor = Color.FromArgb(239, 68, 68);
+            }
+            else if (run.Status == "completed")
+            {
+                _lblCloudStatus.Text = "已完成";
+                _lblCloudStatus.ForeColor = TextMuted;
+            }
+            else
+            {
+                _lblCloudStatus.Text = "运行中…";
+                _lblCloudStatus.ForeColor = Color.FromArgb(245, 158, 11);
+            }
+        }
+        catch
+        {
+            _lblCloudStatus.Text = "状态未知";
+            _lblCloudStatus.ForeColor = TextMuted;
+        }
     }
 
     private async Task DoCheckinAsync()
@@ -581,11 +729,49 @@ public partial class MainForm : Form
         if (result == null || result.code != 0)
         {
             SetLog("签到失败：" + (_api.LastError ?? result?.message ?? "未知错误"));
+            await NotifyCheckinResultAsync(false, 0);
             return;
         }
         SetLog($"签到成功！获得 {result.credits:0} 积分。");
         RecordCheckin(result.credits);
         await RefreshAllAsync();
+
+        // 记录签到后的总积分余额（用于趋势图），并复用于飞书推送
+        double total = -1;
+        if (!string.IsNullOrEmpty(_config.Token))
+            total = await _api.GetRemainingCreditsAsync(_config.Token);
+        if (total >= 0) AppendTotalHistory(DateTime.Now, total);
+
+        await NotifyCheckinResultAsync(true, result.credits, total);
+    }
+
+    /// <summary>签到后向飞书推送结果（成功时附带本次获得与剩余积分）。推送失败不影响签到主流程。</summary>
+    private async Task NotifyCheckinResultAsync(bool success, double gainedCredits, double remaining = -1)
+    {
+        if (string.IsNullOrEmpty(_config.FeishuWebhook)) return;
+        try
+        {
+            if (success && remaining < 0 && !string.IsNullOrEmpty(_config.Token))
+                remaining = await _api.GetRemainingCreditsAsync(_config.Token);
+
+            string text;
+            if (success)
+            {
+                text = "✅ Trae 签到成功\n" +
+                       $"本次获得：{gainedCredits:0} 积分\n" +
+                       (remaining >= 0 ? $"当前剩余：{remaining:0.##} 积分\n" : "") +
+                       $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+            }
+            else
+            {
+                text = "⚠️ Trae 签到失败，请检查会话是否过期\n" +
+                       $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+            }
+
+            var ok = await FeishuNotifier.SendTextAsync(_config.FeishuWebhook, text);
+            if (!ok) SetLog("飞书推送失败（不影响签到）。");
+        }
+        catch { /* 推送失败不影响签到主流程 */ }
     }
 
     private async Task<CheckinStatus?> GetStatusWithValidTokenAsync()
@@ -665,6 +851,18 @@ public partial class MainForm : Form
         ReloadHistory();
     }
 
+    /// <summary>记录一次签到后的总积分余额，用于绘制积分趋势图。</summary>
+    private void AppendTotalHistory(DateTime time, double total)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(TotalHistoryPath)!);
+            File.AppendAllText(TotalHistoryPath, $"{time:yyyy-MM-dd},{total:0.##}{Environment.NewLine}");
+        }
+        catch { }
+        _chart.SetData(ParseTotalHistory());
+    }
+
     private void ReloadHistory()
     {
         try
@@ -678,6 +876,85 @@ public partial class MainForm : Form
                 : "暂无签到记录";
         }
         catch { }
+
+        var history = ParseHistory();
+        _lblStreak.Text = ComputeStreak(history) + " 天";
+        _chart.SetData(ParseTotalHistory());
+    }
+
+    /// <summary>解析签到历史，返回 (日期, 积分) 列表。</summary>
+    private List<(DateTime Date, double Credits)> ParseHistory()
+    {
+        var result = new List<(DateTime, double)>();
+        try
+        {
+            if (!File.Exists(HistoryPath)) return result;
+            foreach (var line in File.ReadAllLines(HistoryPath))
+            {
+                if (line.Length < 10) continue;
+                if (!DateTime.TryParseExact(line.Substring(0, 10), "yyyy-MM-dd", null,
+                    System.Globalization.DateTimeStyles.None, out var date)) continue;
+
+                double credits = 0;
+                var plusIdx = line.IndexOf('+');
+                if (plusIdx >= 0)
+                {
+                    var rest = line.Substring(plusIdx + 1);
+                    var spaceIdx = rest.IndexOf(' ');
+                    var numStr = spaceIdx >= 0 ? rest.Substring(0, spaceIdx) : rest;
+                    double.TryParse(numStr, out credits);
+                }
+                result.Add((date, credits));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    /// <summary>解析总积分历史（credits_total.txt，每行 yyyy-MM-dd,总积分）。</summary>
+    private List<(DateTime Date, double Credits)> ParseTotalHistory()
+    {
+        var result = new List<(DateTime, double)>();
+        try
+        {
+            if (!File.Exists(TotalHistoryPath)) return result;
+            foreach (var line in File.ReadAllLines(TotalHistoryPath))
+            {
+                var idx = line.IndexOf(',');
+                if (idx <= 0) continue;
+                if (!DateTime.TryParseExact(line.Substring(0, idx).Trim(), "yyyy-MM-dd", null,
+                    System.Globalization.DateTimeStyles.None, out var date)) continue;
+                if (!double.TryParse(line.Substring(idx + 1).Trim(), out var total)) continue;
+                result.Add((date, total));
+            }
+        }
+        catch { }
+        return result;
+    }
+
+    /// <summary>今天是否已记录过总积分（用于每天只补记一次）。</summary>
+    private bool TotalHistoryHasToday()
+    {
+        var today = DateTime.Today;
+        foreach (var (date, _) in ParseTotalHistory())
+            if (date.Date == today) return true;
+        return false;
+    }
+
+    /// <summary>计算连续签到天数（今天未签则从昨天起算）。</summary>
+    private int ComputeStreak(List<(DateTime Date, double Credits)> history)
+    {
+        var dates = new HashSet<DateTime>(history.Select(h => h.Date));
+        if (dates.Count == 0) return 0;
+        int streak = 0;
+        var day = DateTime.Today;
+        if (!dates.Contains(day)) day = day.AddDays(-1);
+        while (dates.Contains(day))
+        {
+            streak++;
+            day = day.AddDays(-1);
+        }
+        return streak;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

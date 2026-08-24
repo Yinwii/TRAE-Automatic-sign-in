@@ -16,6 +16,8 @@ public class AppConfig
     public string? GitHubToken { get; set; }
     /// <summary>GitHub 授权后的登录用户名（fork 目标 owner）。</summary>
     public string? GitHubLogin { get; set; }
+    /// <summary>飞书机器人 webhook（签到结果推送；为空则关闭推送）。</summary>
+    public string? FeishuWebhook { get; set; }
     public string DeviceId { get; set; } = GenerateDeviceId();
     public bool AutoCheckinEnabled { get; set; } = true;
     public string AutoCheckinTime { get; set; } = "08:00";

@@ -25,4 +25,5 @@ jobs:
         env:
           TRAE_SESSION: ${{ secrets.TRAE_SESSION }}
           TRAE_DEVICE_ID: ${{ secrets.TRAE_DEVICE_ID }}
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         run: python checkin.py

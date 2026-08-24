@@ -37,6 +37,21 @@ public class DeploymentStatus
     public bool IsDeployed => IsForked && HasSecrets && IsWorkflowEnabled;
 }
 
+/// <summary>最近一次 workflow run 的简要信息（用于本地监控云端签到状态）。</summary>
+public class WorkflowRunInfo
+{
+    /// <summary>运行结论：success / failure / null（尚未完成）。</summary>
+    public string? Conclusion { get; set; }
+    /// <summary>运行状态：completed / in_progress / queued 等。</summary>
+    public string? Status { get; set; }
+    /// <summary>创建时间（ISO8601）。</summary>
+    public string? CreatedAt { get; set; }
+    /// <summary>运行编号。</summary>
+    public long RunNumber { get; set; }
+    /// <summary>运行详情页地址。</summary>
+    public string? HtmlUrl { get; set; }
+}
+
 /// <summary>
 /// GitHub API 客户端：封装设备码授权（Device Flow）与云端自动签到部署所需的
 /// fork / 写 secret / 启用 workflow / 触发 workflow 等 REST 接口。
@@ -48,6 +63,7 @@ public class GitHubApiClient
     private const string SourceRepo = "TRAE-Automatic-sign-in";
     public const string SessionSecretName = "TRAE_SESSION";
     public const string DeviceIdSecretName = "TRAE_DEVICE_ID";
+    public const string FeishuWebhookSecretName = "FEISHU_WEBHOOK";
     private const string WorkflowPath = ".github/workflows/checkin.yml";
 
     private readonly HttpClient _http;
@@ -240,6 +256,30 @@ public class GitHubApiClient
                 if (run.TryGetProperty("status", out var s) && s.GetString() != "completed")
                     return null; // 尚未完成
             }
+        }
+        return null;
+    }
+
+    /// <summary>获取最近一次已完成的 workflow run（结论、状态、时间、编号、地址）。</summary>
+    public async Task<WorkflowRunInfo?> GetLatestRunAsync(string token, string login)
+    {
+        // status=completed 只取已完成的运行，避免启动瞬间拿到 in_progress 的 run 而误显示「运行中」
+        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/runs?per_page=1&status=completed", token);
+        if (!resp.IsSuccessStatusCode) return null;
+        var json = await resp.Content.ReadAsStringAsync();
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("workflow_runs", out var arr) || arr.ValueKind != JsonValueKind.Array)
+            return null;
+
+        foreach (var run in arr.EnumerateArray())
+        {
+            var info = new WorkflowRunInfo();
+            info.Conclusion = run.TryGetProperty("conclusion", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+            info.Status = run.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+            info.CreatedAt = run.TryGetProperty("created_at", out var ca) && ca.ValueKind == JsonValueKind.String ? ca.GetString() : null;
+            info.RunNumber = run.TryGetProperty("run_number", out var rn) && rn.TryGetInt64(out var rnv) ? rnv : 0;
+            info.HtmlUrl = run.TryGetProperty("html_url", out var hu) && hu.ValueKind == JsonValueKind.String ? hu.GetString() : null;
+            return info;
         }
         return null;
     }

@@ -301,6 +301,13 @@ public partial class MainForm
             if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.DeviceIdSecretName, _config.DeviceId)) { SetCloudLog(_ghApi.LastError ?? "写设备号 secret 失败"); return; }
             SetCloudLog("TRAE_DEVICE_ID 写入成功");
 
+            if (!string.IsNullOrEmpty(_config.FeishuWebhook))
+            {
+                SetCloudLog("正在写入 FEISHU_WEBHOOK secret…");
+                if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.FeishuWebhookSecretName, _config.FeishuWebhook)) { SetCloudLog(_ghApi.LastError ?? "写飞书 webhook secret 失败"); return; }
+                SetCloudLog("FEISHU_WEBHOOK 写入成功");
+            }
+
             SetCloudLog("正在启用 workflow…");
             long wfId = await _ghApi.GetWorkflowIdAsync(token, login);
             if (wfId < 0) { SetCloudLog(_ghApi.LastError ?? "未找到 workflow"); return; }
