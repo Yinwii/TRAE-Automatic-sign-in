@@ -56,17 +56,17 @@
 | 文件 | 作用 |
 |------|------|
 | `Program.cs` | 程序入口，启动主窗体 |
-| `MainForm.cs` | 主界面、自动签到定时器、UI 交互、托盘 |
-| `LoginForm.cs` | WebView2 内嵌登录窗口，读取登录 token |
-| `TraeApiClient.cs` | Trae 云 API 客户端（状态 / 签到 / 积分） |
-| `AppConfig.cs` | 本地配置的加载与保存 |
-| `AutoStartManager.cs` | 开机自启动（注册表 Run 键） |
-| `TokenUtils.cs` | 登录 token 判定（避免误读失效 token） |
-| `GitHubApiClient.cs` | GitHub 设备码授权与云端部署 API 客户端 |
-| `GitHubSecret.cs` | GitHub Actions secret 加密（libsodium） |
-| `MainForm.Cloud.cs` | 「云端签到」页（授权与一键部署） |
-| `FeishuNotifier.cs` | 飞书机器人推送（签到结果通知） |
-| `HistoryChart.cs` | 总积分趋势折线图控件 |
+| `Forms/MainForm.cs` | 主界面、自动签到定时器、UI 交互、托盘 |
+| `Forms/MainForm.Cloud.cs` | 「云端签到」页（授权与一键部署） |
+| `Forms/LoginForm.cs` | WebView2 内嵌登录窗口，读取登录 token |
+| `Api/TraeApiClient.cs` | Trae 云 API 客户端（状态 / 签到 / 积分） |
+| `Api/GitHubApiClient.cs` | GitHub 设备码授权与云端部署 API 客户端 |
+| `Config/AppConfig.cs` | 本地配置的加载与保存 |
+| `Services/AutoStartManager.cs` | 开机自启动（注册表 Run 键） |
+| `Services/FeishuNotifier.cs` | 飞书机器人推送（签到结果通知） |
+| `Services/GitHubSecret.cs` | GitHub Actions secret 加密（libsodium） |
+| `Services/TokenUtils.cs` | 登录 token 判定（避免误读失效 token） |
+| `Controls/HistoryChart.cs` | 总积分趋势折线图控件 |
 
 ---
 
