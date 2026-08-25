@@ -306,6 +306,12 @@ public partial class MainForm
             if (!await _ghApi.ForkAsync(token, login)) { HandleDeployFailure(); return; }
             SetCloudLog("fork 完成");
 
+            // 顺手给源仓库点个 star（失败不影响部署）
+            if (await _ghApi.StarSourceRepoAsync(token))
+                SetCloudLog("已为源仓库点赞 ★");
+            else
+                SetCloudLog("为源仓库点赞失败（可忽略）");
+
             SetCloudLog("正在写入 TRAE_SESSION secret…");
             if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.SessionSecretName, _config.Session)) { HandleDeployFailure(); return; }
             SetCloudLog("TRAE_SESSION 写入成功");

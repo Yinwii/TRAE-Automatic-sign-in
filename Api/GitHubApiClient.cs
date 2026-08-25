@@ -172,6 +172,20 @@ public class GitHubApiClient
         catch (Exception ex) { LastError = ex.Message; return false; }
     }
 
+    /// <summary>
+    /// 给源仓库点 star（顺手推广）。204 表示成功；404 表示不可点星（如 owner 本人），静默忽略；
+    /// 失败不影响部署流程。
+    /// </summary>
+    public async Task<bool> StarSourceRepoAsync(string token)
+    {
+        try
+        {
+            using var resp = await SendApiAsync(HttpMethod.Put, $"/user/starred/{SourceOwner}/{SourceRepo}", token);
+            return resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.NotFound;
+        }
+        catch { return false; }
+    }
+
     /// <summary>用仓库公开密钥加密后，把 secret 写入仓库的指定 Actions secret。</summary>
     public async Task<bool> SetSecretAsync(string token, string login, string secretName, string secretValue)
     {
