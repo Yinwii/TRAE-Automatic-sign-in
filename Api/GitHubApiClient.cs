@@ -73,7 +73,7 @@ public class GitHubApiClient
     public GitHubApiClient()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4.1");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
 
@@ -181,7 +181,9 @@ public class GitHubApiClient
             var pkJson = await pkResp.Content.ReadAsStringAsync();
             if (!pkResp.IsSuccessStatusCode)
             {
-                LastError = $"获取公开密钥失败：HTTP {(int)pkResp.StatusCode}";
+                LastError = pkResp.StatusCode == System.Net.HttpStatusCode.Unauthorized
+                    ? "GitHub 授权已失效，请重新授权"
+                    : $"获取公开密钥失败：HTTP {(int)pkResp.StatusCode}";
                 return false;
             }
             using var doc = JsonDocument.Parse(pkJson);
@@ -294,14 +296,16 @@ public class GitHubApiClient
         var result = new DeploymentStatus();
         try
         {
-            // 用 fork 仓库是否存在同时探测授权：401 表示 token 已失效
-            using var repoResp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}", token);
-            if (repoResp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            // 用 GET /user 探测授权（必须认证；公开仓库 GET 匿名可读，token 失效时也会返回 200，不能用来判断授权）
+            using var userResp = await SendApiAsync(HttpMethod.Get, "/user", token);
+            if (userResp.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 result.IsAuthorized = false;
                 return result;
             }
             result.IsAuthorized = true;
+
+            using var repoResp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}", token);
             result.IsForked = repoResp.IsSuccessStatusCode;
             if (!result.IsForked) return result;
 

@@ -331,7 +331,7 @@ public partial class MainForm : Form
         var acctPanel = CardPanel("账号", BuildAccountRow());
         grid.Controls.Add(acctPanel, 0, 3);
 
-        var notifyPanel = CardPanel("签到结果推送（飞书机器人）", BuildWebhookRow());
+        var notifyPanel = CardPanel("云端签到推送（飞书机器人）", BuildWebhookRow());
         grid.Controls.Add(notifyPanel, 0, 4);
 
         var hint = new Label
@@ -729,49 +729,39 @@ public partial class MainForm : Form
         if (result == null || result.code != 0)
         {
             SetLog("签到失败：" + (_api.LastError ?? result?.message ?? "未知错误"));
-            await NotifyCheckinResultAsync(false, 0);
+            NotifyNativeCheckin(false, 0);
             return;
         }
         SetLog($"签到成功！获得 {result.credits:0} 积分。");
         RecordCheckin(result.credits);
         await RefreshAllAsync();
 
-        // 记录签到后的总积分余额（用于趋势图），并复用于飞书推送
+        // 记录签到后的总积分余额（用于趋势图）
         double total = -1;
         if (!string.IsNullOrEmpty(_config.Token))
             total = await _api.GetRemainingCreditsAsync(_config.Token);
         if (total >= 0) AppendTotalHistory(DateTime.Now, total);
 
-        await NotifyCheckinResultAsync(true, result.credits, total);
+        NotifyNativeCheckin(true, result.credits, total);
     }
 
-    /// <summary>签到后向飞书推送结果（成功时附带本次获得与剩余积分）。推送失败不影响签到主流程。</summary>
-    private async Task NotifyCheckinResultAsync(bool success, double gainedCredits, double remaining = -1)
+    /// <summary>签到后弹出 Windows 原生通知（托盘气泡）。</summary>
+    private void NotifyNativeCheckin(bool success, double gainedCredits, double remaining = -1)
     {
-        if (string.IsNullOrEmpty(_config.FeishuWebhook)) return;
         try
         {
-            if (success && remaining < 0 && !string.IsNullOrEmpty(_config.Token))
-                remaining = await _api.GetRemainingCreditsAsync(_config.Token);
-
-            string text;
             if (success)
             {
-                text = "✅ Trae 签到成功\n" +
-                       $"本次获得：{gainedCredits:0} 积分\n" +
-                       (remaining >= 0 ? $"当前剩余：{remaining:0.##} 积分\n" : "") +
-                       $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+                string text = $"本次获得：{gainedCredits:0} 积分";
+                if (remaining >= 0) text += $"\n当前剩余：{remaining:0.##} 积分";
+                _tray.ShowBalloonTip(5000, "Trae 签到成功 ✓", text, ToolTipIcon.Info);
             }
             else
             {
-                text = "⚠️ Trae 签到失败，请检查会话是否过期\n" +
-                       $"时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}";
+                _tray.ShowBalloonTip(5000, "Trae 签到失败 ⚠", "请检查会话是否过期，重新登录后重试。", ToolTipIcon.Error);
             }
-
-            var ok = await FeishuNotifier.SendTextAsync(_config.FeishuWebhook, text);
-            if (!ok) SetLog("飞书推送失败（不影响签到）。");
         }
-        catch { /* 推送失败不影响签到主流程 */ }
+        catch { /* 通知失败不影响签到主流程 */ }
     }
 
     private async Task<CheckinStatus?> GetStatusWithValidTokenAsync()

@@ -124,8 +124,10 @@ public partial class MainForm
 
             if (string.IsNullOrEmpty(login))
             {
-                _lblCloudState.Text = "无法获取 GitHub 用户名，请重新授权";
-                _btnCloudAction.Text = "授权 GitHub";
+                // token 已失效（/user 返回 401）
+                ClearCloudAuth();
+                SetCloudLog("GitHub 授权已失效，请重新授权");
+                RefreshCloudState();
                 return;
             }
 
@@ -134,9 +136,7 @@ public partial class MainForm
             if (!status.IsAuthorized)
             {
                 // 授权已失效：清除本地授权信息，回到未授权状态
-                _config.GitHubToken = null;
-                _config.GitHubLogin = null;
-                _config.Save();
+                ClearCloudAuth();
                 SetCloudLog("GitHub 授权已失效，请重新授权");
                 RefreshCloudState();
                 return;
@@ -260,6 +260,16 @@ public partial class MainForm
         OpenAuthPage(_pendingCode);
     }
 
+    /// <summary>清除本地 GitHub 授权信息，回到未授权状态。</summary>
+    private void ClearCloudAuth()
+    {
+        _config.GitHubToken = null;
+        _config.GitHubLogin = null;
+        _config.Save();
+        _pendingCode = null;
+        _lblCloudCode.Visible = false;
+    }
+
     private async Task DeployAsync()
     {
         if (string.IsNullOrEmpty(_config.Session))
@@ -274,15 +284,18 @@ public partial class MainForm
         try
         {
             string token = _config.GitHubToken!;
-            string login = _config.GitHubLogin ?? "";
+
+            // 先校验授权有效性并获取用户名：token 失效时 /user 返回 401，直接清理授权
+            string login = await _ghApi.GetLoginAsync(token) ?? "";
             if (string.IsNullOrEmpty(login))
             {
-                login = await _ghApi.GetLoginAsync(token) ?? "";
-                if (string.IsNullOrEmpty(login))
-                {
-                    SetCloudLog("无法获取 GitHub 用户名，请重新授权");
-                    return;
-                }
+                ClearCloudAuth();
+                SetCloudLog("GitHub 授权已失效，请重新授权");
+                RefreshCloudState();
+                return;
+            }
+            if (_config.GitHubLogin != login)
+            {
                 _config.GitHubLogin = login;
                 _config.Save();
             }
@@ -290,32 +303,32 @@ public partial class MainForm
             SetCloudLog("开始部署…");
 
             SetCloudLog("正在 fork 仓库…");
-            if (!await _ghApi.ForkAsync(token, login)) { SetCloudLog(_ghApi.LastError ?? "fork 失败"); return; }
+            if (!await _ghApi.ForkAsync(token, login)) { HandleDeployFailure(); return; }
             SetCloudLog("fork 完成");
 
             SetCloudLog("正在写入 TRAE_SESSION secret…");
-            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.SessionSecretName, _config.Session)) { SetCloudLog(_ghApi.LastError ?? "写 secret 失败"); return; }
+            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.SessionSecretName, _config.Session)) { HandleDeployFailure(); return; }
             SetCloudLog("TRAE_SESSION 写入成功");
 
             SetCloudLog("正在写入 TRAE_DEVICE_ID secret…");
-            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.DeviceIdSecretName, _config.DeviceId)) { SetCloudLog(_ghApi.LastError ?? "写设备号 secret 失败"); return; }
+            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.DeviceIdSecretName, _config.DeviceId)) { HandleDeployFailure(); return; }
             SetCloudLog("TRAE_DEVICE_ID 写入成功");
 
             if (!string.IsNullOrEmpty(_config.FeishuWebhook))
             {
                 SetCloudLog("正在写入 FEISHU_WEBHOOK secret…");
-                if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.FeishuWebhookSecretName, _config.FeishuWebhook)) { SetCloudLog(_ghApi.LastError ?? "写飞书 webhook secret 失败"); return; }
+                if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.FeishuWebhookSecretName, _config.FeishuWebhook)) { HandleDeployFailure(); return; }
                 SetCloudLog("FEISHU_WEBHOOK 写入成功");
             }
 
             SetCloudLog("正在启用 workflow…");
             long wfId = await _ghApi.GetWorkflowIdAsync(token, login);
-            if (wfId < 0) { SetCloudLog(_ghApi.LastError ?? "未找到 workflow"); return; }
-            if (!await _ghApi.EnableWorkflowAsync(token, login, wfId)) { SetCloudLog(_ghApi.LastError ?? "启用失败"); return; }
+            if (wfId < 0) { HandleDeployFailure(); return; }
+            if (!await _ghApi.EnableWorkflowAsync(token, login, wfId)) { HandleDeployFailure(); return; }
             SetCloudLog("workflow 已启用");
 
             SetCloudLog("正在触发一次验证运行…");
-            if (!await _ghApi.DispatchWorkflowAsync(token, login, wfId)) { SetCloudLog(_ghApi.LastError ?? "触发失败"); return; }
+            if (!await _ghApi.DispatchWorkflowAsync(token, login, wfId)) { HandleDeployFailure(); return; }
 
             SetCloudLog("等待运行结果…");
             string? conclusion = null;
@@ -345,6 +358,22 @@ public partial class MainForm
         {
             _cloudBusy = false;
             _btnCloudAction.Enabled = true;
+        }
+    }
+
+    /// <summary>部署失败统一处理：授权失效时清理本地授权并回到重新授权状态。</summary>
+    private void HandleDeployFailure()
+    {
+        var err = _ghApi.LastError ?? "";
+        if (err.Contains("授权已失效", StringComparison.Ordinal))
+        {
+            ClearCloudAuth();
+            SetCloudLog(err);
+            RefreshCloudState();
+        }
+        else
+        {
+            SetCloudLog(string.IsNullOrEmpty(err) ? "部署失败，请重试" : err);
         }
     }
 
