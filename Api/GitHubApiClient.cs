@@ -73,7 +73,7 @@ public class GitHubApiClient
     public GitHubApiClient()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4.1");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4.2");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
 
@@ -173,18 +173,28 @@ public class GitHubApiClient
     }
 
     /// <summary>
-    /// 给源仓库点 star（顺手推广）。204 表示成功；404 表示不可点星（如 owner 本人），静默忽略；
-    /// 失败不影响部署流程。
+    /// 给源仓库点 star（顺手推广）。204 表示成功；owner 本人或失败时静默跳过，不影响部署流程。
     /// </summary>
-    public async Task<bool> StarSourceRepoAsync(string token)
+    public async Task<bool> StarSourceRepoAsync(string token, string login)
     {
+        if (ShouldSkipStar(login)) return true;
         try
         {
             using var resp = await SendApiAsync(HttpMethod.Put, $"/user/starred/{SourceOwner}/{SourceRepo}", token);
-            return resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.NotFound;
+            return resp.IsSuccessStatusCode;
         }
         catch { return false; }
     }
+
+    /// <summary>是否应跳过给源仓库点星（owner 本人不能也不会点自己的星）。</summary>
+    public static bool ShouldSkipStar(string login)
+        => !string.IsNullOrEmpty(login) && string.Equals(login, SourceOwner, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>workflow 相关错误文案；409 表示仓库未开启 Actions，附解决指引。</summary>
+    public static string BuildWorkflowError(int statusCode)
+        => statusCode == 409
+            ? "GitHub 仓库未开启 Actions：请到仓库 Settings → Actions → General 勾选 Allow owner actions and reusable workflows（或 Allow all actions）后重试"
+            : $"HTTP {statusCode}";
 
     /// <summary>用仓库公开密钥加密后，把 secret 写入仓库的指定 Actions secret。</summary>
     public async Task<bool> SetSecretAsync(string token, string login, string secretName, string secretValue)
@@ -223,6 +233,12 @@ public class GitHubApiClient
     public async Task<long> GetWorkflowIdAsync(string token, string login)
     {
         using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/workflows", token);
+        if (!resp.IsSuccessStatusCode)
+        {
+            // 409 表示仓库未开启 Actions，附带解决指引
+            LastError = BuildWorkflowError((int)resp.StatusCode);
+            return -1;
+        }
         var json = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
         if (doc.RootElement.TryGetProperty("workflows", out var arr) && arr.ValueKind == JsonValueKind.Array)

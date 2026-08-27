@@ -306,8 +306,8 @@ public partial class MainForm
             if (!await _ghApi.ForkAsync(token, login)) { HandleDeployFailure(); return; }
             SetCloudLog("fork 完成");
 
-            // 顺手给源仓库点个 star（失败不影响部署）
-            if (await _ghApi.StarSourceRepoAsync(token))
+            // 顺手给源仓库点个 star（owner 本人自动跳过，失败不影响部署）
+            if (await _ghApi.StarSourceRepoAsync(token, login))
                 SetCloudLog("已为源仓库点赞 ★");
             else
                 SetCloudLog("为源仓库点赞失败（可忽略）");
@@ -350,6 +350,8 @@ public partial class MainForm
                 SetCloudLog("部署成功！云端自动签到已就绪，GitHub 将每天北京时间 8:00 自动签到。");
                 _lblCloudState.Text = "已部署完成，云端每天自动签到";
                 _btnCloudAction.Text = "重新部署";
+                // 同步刷新仪表盘的云端签到状态，避免停留在旧的「未部署」
+                await RefreshCloudStatusAsync();
             }
             else if (string.IsNullOrEmpty(conclusion))
             {

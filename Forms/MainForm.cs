@@ -645,61 +645,35 @@ public partial class MainForm : Form
         await RefreshCloudStatusAsync();
     }
 
-    /// <summary>刷新仪表盘的云端签到状态（读取最近一次 GitHub Actions 运行结论）。</summary>
+    /// <summary>刷新仪表盘的云端签到状态（读取最近一次已完成的 GitHub Actions 运行）。</summary>
     private async Task RefreshCloudStatusAsync()
     {
         if (string.IsNullOrEmpty(_config.GitHubToken))
         {
-            _lblCloudStatus.Text = "未部署";
+            _lblCloudStatus.Text = CloudStatusFormatter.Describe(true, null).Text;
             _lblCloudStatus.ForeColor = TextMuted;
             return;
         }
         try
         {
+            // 先探测授权：/user 401 时视为授权失效，而不是误报「未部署」
+            bool authorized = true;
             string login = _config.GitHubLogin ?? "";
             if (string.IsNullOrEmpty(login))
             {
                 login = await _ghApi.GetLoginAsync(_config.GitHubToken) ?? "";
-                if (!string.IsNullOrEmpty(login))
-                {
-                    _config.GitHubLogin = login;
-                    _config.Save();
-                }
-            }
-            if (string.IsNullOrEmpty(login))
-            {
-                _lblCloudStatus.Text = "未部署";
-                _lblCloudStatus.ForeColor = TextMuted;
-                return;
+                if (string.IsNullOrEmpty(login)) authorized = false;
+                else { _config.GitHubLogin = login; _config.Save(); }
             }
 
-            var run = await _ghApi.GetLatestRunAsync(_config.GitHubToken, login);
-            if (run == null)
-            {
-                _lblCloudStatus.Text = "未部署";
-                _lblCloudStatus.ForeColor = TextMuted;
-                return;
-            }
-            if (run.Conclusion == "success")
-            {
-                _lblCloudStatus.Text = "最近成功 ✓";
-                _lblCloudStatus.ForeColor = Color.FromArgb(16, 185, 129);
-            }
-            else if (run.Conclusion == "failure")
-            {
-                _lblCloudStatus.Text = "最近失败 ✗";
-                _lblCloudStatus.ForeColor = Color.FromArgb(239, 68, 68);
-            }
-            else if (run.Status == "completed")
-            {
-                _lblCloudStatus.Text = "已完成";
-                _lblCloudStatus.ForeColor = TextMuted;
-            }
-            else
-            {
-                _lblCloudStatus.Text = "运行中…";
-                _lblCloudStatus.ForeColor = Color.FromArgb(245, 158, 11);
-            }
+            WorkflowRunInfo? run = null;
+            if (authorized && !string.IsNullOrEmpty(login))
+                run = await _ghApi.GetLatestRunAsync(_config.GitHubToken, login);
+
+            var (text, isError) = CloudStatusFormatter.Describe(authorized, run);
+            _lblCloudStatus.Text = text;
+            _lblCloudStatus.ForeColor = isError ? Color.FromArgb(239, 68, 68) : TextMuted;
+            if (text.Contains("最近成功")) _lblCloudStatus.ForeColor = Color.FromArgb(16, 185, 129);
         }
         catch
         {
@@ -732,6 +706,20 @@ public partial class MainForm : Form
             NotifyNativeCheckin(false, 0);
             return;
         }
+
+        // 云端已签到导致 claim 幂等返回 credits=0 时，不当作新签到（避免记录 0 积分污染历史）
+        if (CheckinEvaluator.IsAlreadyCheckedIn(result))
+        {
+            SetLog("今日已在云端完成签到，无需重复签到。");
+            if (_config.LastCheckinDate != DateTime.Today)
+            {
+                _config.LastCheckinDate = DateTime.Today;
+                _config.Save();
+            }
+            await RefreshAllAsync();
+            return;
+        }
+
         SetLog($"签到成功！获得 {result.credits:0} 积分。");
         RecordCheckin(result.credits);
         await RefreshAllAsync();
