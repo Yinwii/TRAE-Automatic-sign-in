@@ -707,10 +707,14 @@ public partial class MainForm : Form
             return;
         }
 
-        // 云端已签到导致 claim 幂等返回 credits=0 时，不当作新签到（避免记录 0 积分污染历史）
-        if (CheckinEvaluator.IsAlreadyCheckedIn(result))
+        // claim 响应只含 code/message，本次所得积分需从 status 接口读取
+        var after = await _api.GetStatusAsync(_config.Token);
+        double gained = CheckinEvaluator.ResolveGainedCredits(after);
+
+        // 未能取得积分数据时，不当作新签到记录，避免写入 0 积分污染历史
+        if (gained <= 0)
         {
-            SetLog("今日已在云端完成签到，无需重复签到。");
+            SetLog("签到成功，但未能读取本次积分数额。");
             if (_config.LastCheckinDate != DateTime.Today)
             {
                 _config.LastCheckinDate = DateTime.Today;
@@ -720,8 +724,8 @@ public partial class MainForm : Form
             return;
         }
 
-        SetLog($"签到成功！获得 {result.credits:0} 积分。");
-        RecordCheckin(result.credits);
+        SetLog($"签到成功！获得 {gained:0} 积分。");
+        RecordCheckin(gained);
         await RefreshAllAsync();
 
         // 记录签到后的总积分余额（用于趋势图）
@@ -730,7 +734,7 @@ public partial class MainForm : Form
             total = await _api.GetRemainingCreditsAsync(_config.Token);
         if (total >= 0) AppendTotalHistory(DateTime.Now, total);
 
-        NotifyNativeCheckin(true, result.credits, total);
+        NotifyNativeCheckin(true, gained, total);
     }
 
     /// <summary>签到后弹出 Windows 原生通知（托盘气泡）。</summary>

@@ -73,7 +73,7 @@ public class GitHubApiClient
     public GitHubApiClient()
     {
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4.2");
+        _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4.3");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
 

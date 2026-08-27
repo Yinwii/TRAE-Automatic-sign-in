@@ -7,7 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>TraeCheckin.Launcher</AssemblyName>
     <RootNamespace>TraeCheckin.Launcher</RootNamespace>
-    <Version>1.4.2</Version>
+    <Version>1.4.3</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
