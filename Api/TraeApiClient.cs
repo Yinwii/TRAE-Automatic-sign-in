@@ -13,6 +13,8 @@ public class CheckinStatus
     public bool enable { get; set; }
     public bool checked_in { get; set; }
     public double credits { get; set; }
+    /// <summary>连续/额外签到奖励（接口动态返回，如基础 150 + 连签 50）。</summary>
+    public double extra_credits { get; set; }
     public int code { get; set; }
     public string? message { get; set; }
 }

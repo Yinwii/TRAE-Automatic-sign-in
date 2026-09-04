@@ -264,6 +264,8 @@ public partial class MainForm : Form
         var cloudCard = Card("云端签到状态", _lblCloudStatus);
         _lblCloudStatus.TextAlign = ContentAlignment.MiddleLeft;
         _lblCloudStatus.Dock = DockStyle.Fill;
+        // 避免「授权失效，请重新授权」等较长文案在窄窗格时被右缘裁剪
+        _lblCloudStatus.AutoSize = false;
         root.Controls.Add(cloudCard, 1, 2);
 
         // 积分趋势图（跨两列）
@@ -656,18 +658,31 @@ public partial class MainForm : Form
         }
         try
         {
-            // 先探测授权：/user 401 时视为授权失效，而不是误报「未部署」
+            // 始终用 GET /user 探测授权：token 失效时返回 401。
+            // 不能依赖 GitHubLogin 缓存跳过探测，否则授权失效会被 GetLatestRunAsync 的 null
+            // 误判成「未部署」（而非「授权失效」）。
             bool authorized = true;
-            string login = _config.GitHubLogin ?? "";
+            string login = await _ghApi.GetLoginAsync(_config.GitHubToken) ?? "";
             if (string.IsNullOrEmpty(login))
             {
-                login = await _ghApi.GetLoginAsync(_config.GitHubToken) ?? "";
-                if (string.IsNullOrEmpty(login)) authorized = false;
-                else { _config.GitHubLogin = login; _config.Save(); }
+                authorized = false;
+                // token 失效：清掉本地授权并让云端页同步回到未授权，
+                // 避免云端页残留旧文案「已部署完成」与仪表盘「授权失效」不一致。
+                if (!string.IsNullOrEmpty(_config.GitHubToken))
+                {
+                    ClearCloudAuth();
+                    _lblCloudState.Text = "授权已失效，请重新授权";
+                    _btnCloudAction.Text = "授权 GitHub 并部署";
+                }
+            }
+            else if (_config.GitHubLogin != login)
+            {
+                _config.GitHubLogin = login;
+                _config.Save();
             }
 
             WorkflowRunInfo? run = null;
-            if (authorized && !string.IsNullOrEmpty(login))
+            if (authorized)
                 run = await _ghApi.GetLatestRunAsync(_config.GitHubToken, login);
 
             var (text, isError) = CloudStatusFormatter.Describe(authorized, run);
