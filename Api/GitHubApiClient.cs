@@ -37,6 +37,15 @@ public class DeploymentStatus
     public bool IsDeployed => IsForked && HasSecrets && IsWorkflowEnabled;
 }
 
+/// <summary>手动粘贴 Token（PAT）的校验结果。</summary>
+public class PatValidation
+{
+    public bool IsValid { get; set; }
+    public string? Login { get; set; }
+    public bool CanWrite { get; set; }
+    public string? Error { get; set; }
+}
+
 /// <summary>最近一次 workflow run 的简要信息（用于本地监控云端签到状态）。</summary>
 public class WorkflowRunInfo
 {
@@ -195,6 +204,36 @@ public class GitHubApiClient
         => statusCode == 409
             ? "GitHub 仓库未开启 Actions：请到仓库 Settings → Actions → General 勾选 Allow owner actions and reusable workflows（或 Allow all actions）后重试"
             : $"HTTP {statusCode}";
+
+    /// <summary>预检：是否像是一段可用的 GitHub token（PAT 或 OAuth token 均放行）。</summary>
+    public static bool IsPlausibleToken(string? token)
+        => !string.IsNullOrWhiteSpace(token) && token.Trim().Length >= 20;
+
+    /// <summary>解析 GET /repos/{owner}/{repo} 响应中的 permissions.push（无写权限返回 false）。</summary>
+    public static bool ParsePermissionsPush(string json)
+    {
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            return ParsePermissionsPush(doc.RootElement);
+        }
+        catch (System.Text.Json.JsonException) { return false; }
+    }
+
+    /// <summary>解析 permissions.push 的 JsonElement 版本。</summary>
+    public static bool ParsePermissionsPush(System.Text.Json.JsonElement root)
+    {
+        if (!root.TryGetProperty("permissions", out var perms) || perms.ValueKind != System.Text.Json.JsonValueKind.Object)
+            return false;
+        return perms.TryGetProperty("push", out var push) && push.ValueKind == System.Text.Json.JsonValueKind.True;
+    }
+
+    /// <summary>PAT 对目标仓库写权限不足时的指引文案。</summary>
+    public static string BuildPatScopeHint()
+        => "该 Token 对目标仓库没有写权限。请确认：1) Repository access 已包含 TRAE-Automatic-sign-in"
+           + "（若已 fork 还需包含你自己的 fork 仓库）；"
+           + "2) Permissions 中 Actions / Contents / Pull requests / Secrets / Workflows 均为 Read and write，"
+           + "Metadata 为只读（自动带出）。修改后需重新生成 Token。";
 
     /// <summary>用仓库公开密钥加密后，把 secret 写入仓库的指定 Actions secret。</summary>
     public async Task<bool> SetSecretAsync(string token, string login, string secretName, string secretValue)
