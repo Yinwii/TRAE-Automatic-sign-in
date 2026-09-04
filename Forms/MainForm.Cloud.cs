@@ -12,6 +12,8 @@ public partial class MainForm
     private readonly Label _lblCloudState = new();
     private readonly Label _lblCloudCode = new();
     private readonly Button _btnCloudAction = new();
+    private readonly Button _btnUsePat = new();
+    private readonly TableLayoutPanel _cloudActionRow = new();
     private readonly ListBox _cloudLog = new();
     private bool _cloudBusy;
     private GitHubDeviceCode? _pendingCode;
@@ -56,8 +58,7 @@ public partial class MainForm
         _lblCloudCode.TextAlign = ContentAlignment.MiddleLeft;
         _lblCloudCode.Visible = false;
 
-        _btnCloudAction.Dock = DockStyle.Bottom;
-        _btnCloudAction.Height = 40;
+        _btnCloudAction.Dock = DockStyle.Fill;
         _btnCloudAction.FlatStyle = FlatStyle.Flat;
         _btnCloudAction.FlatAppearance.BorderSize = 0;
         _btnCloudAction.BackColor = Accent;
@@ -66,10 +67,81 @@ public partial class MainForm
         _btnCloudAction.Cursor = Cursors.Hand;
         _btnCloudAction.Click += async (_, _) => await OnCloudActionAsync();
 
-        panel.Controls.Add(_btnCloudAction);
+        _btnUsePat.Dock = DockStyle.Fill;
+        _btnUsePat.Text = "粘贴 Token（PAT）";
+        _btnUsePat.FlatStyle = FlatStyle.Flat;
+        _btnUsePat.FlatAppearance.BorderColor = Accent;
+        _btnUsePat.FlatAppearance.BorderSize = 1;
+        _btnUsePat.BackColor = CardBg;
+        _btnUsePat.ForeColor = Accent;
+        _btnUsePat.Font = new Font("Segoe UI", 10, FontStyle.Bold);
+        _btnUsePat.Cursor = Cursors.Hand;
+        _btnUsePat.Click += async (_, _) => await UsePatAsync();
+
+        _cloudActionRow.Dock = DockStyle.Bottom;
+        _cloudActionRow.Height = 40;
+        _cloudActionRow.ColumnCount = 2;
+        _cloudActionRow.RowCount = 1;
+        _cloudActionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _cloudActionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        _cloudActionRow.Controls.Add(_btnCloudAction, 0, 0);
+        _cloudActionRow.Controls.Add(_btnUsePat, 1, 0);
+
+        panel.Controls.Add(_cloudActionRow);
         panel.Controls.Add(_lblCloudCode);
         panel.Controls.Add(_lblCloudState);
         return panel;
+    }
+
+    /// <summary>控制底部按钮区形态：patOption=true 时双按钮并列，false 时主按钮占满两列。</summary>
+    private void UpdateCloudActionUi(bool patOption)
+    {
+        if (patOption)
+        {
+            _btnUsePat.Visible = true;
+            _cloudActionRow.SetColumnSpan(_btnCloudAction, 1);
+        }
+        else
+        {
+            _btnUsePat.Visible = false;
+            _cloudActionRow.SetColumnSpan(_btnCloudAction, 2);
+        }
+    }
+
+    /// <summary>粘贴 PAT 入口：弹窗输入 → 校验 → 保存并触发部署检测。</summary>
+    private async Task UsePatAsync()
+    {
+        if (_cloudBusy) return;
+        var dlg = new TextInputDialog("粘贴 GitHub Token（PAT）",
+            "1) 打开 https://github.com/settings/personal-access-tokens/new 创建 Fine-grained Token\n" +
+            "2) Resource owner 选你的账号；Repository access 勾选 TRAE-Automatic-sign-in\n" +
+            "3) Permissions：Actions / Contents / Pull requests / Secrets / Workflows 均选 Read and write\n" +
+            "4) 生成后把 github_pat_ 开头的 Token 粘贴到下方");
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        string pat = dlg.Value ?? "";
+        if (string.IsNullOrWhiteSpace(pat)) return;
+
+        _cloudBusy = true;
+        _btnUsePat.Enabled = false;
+        try
+        {
+            var v = await _ghApi.ValidatePatAsync(pat);
+            if (!v.IsValid)
+            {
+                SetCloudLog("PAT 校验失败：" + (v.Error ?? "未知错误"));
+                return;
+            }
+            _config.GitHubToken = pat;
+            _config.GitHubLogin = v.Login;
+            _config.Save();
+            SetCloudLog("已使用 PAT 授权：" + v.Login + (v.CanWrite ? "" : "（尚未检测到 fork 仓库，部署时会自动创建）"));
+            RefreshCloudState();
+        }
+        finally
+        {
+            _cloudBusy = false;
+            _btnUsePat.Enabled = true;
+        }
     }
 
     private Control BuildCloudHint()
@@ -88,6 +160,7 @@ public partial class MainForm
     {
         if (!string.IsNullOrEmpty(_config.GitHubToken))
         {
+            UpdateCloudActionUi(false);
             _lblCloudState.Text = "已授权" + (string.IsNullOrEmpty(_config.GitHubLogin) ? "" : "：" + _config.GitHubLogin);
             _btnCloudAction.Text = "检测部署状态…";
             _btnCloudAction.Enabled = false;
@@ -95,6 +168,7 @@ public partial class MainForm
         }
         else
         {
+            UpdateCloudActionUi(true);
             _lblCloudState.Text = "尚未授权 GitHub";
             _btnCloudAction.Text = "授权 GitHub";
             _btnCloudAction.Enabled = true;
