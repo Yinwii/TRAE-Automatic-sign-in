@@ -355,6 +355,55 @@ public class GitHubApiClient
         return null;
     }
 
+    /// <summary>
+    /// 校验手动粘贴的 Token：GET /user 确认有效并取 login，再按 login 分派探测目标仓库写权限。
+    /// owner 用源仓库校验；非 owner 若尚未 fork（404）放行（fork 后对自有仓库天然可写）。
+    /// </summary>
+    public async Task<PatValidation> ValidatePatAsync(string pat)
+    {
+        string token = (pat ?? "").Trim();
+        if (!IsPlausibleToken(token))
+            return new PatValidation { IsValid = false, Error = "请输入有效的 GitHub Token（github_pat_ 或 gho_ 开头，长度不少于 20）" };
+
+        try
+        {
+            string login = await GetLoginAsync(token) ?? "";
+            if (string.IsNullOrEmpty(login))
+            {
+                LastError = "Token 无效或已被撤销";
+                return new PatValidation { IsValid = false, Error = LastError };
+            }
+
+            bool isOwner = string.Equals(login, SourceOwner, StringComparison.OrdinalIgnoreCase);
+            string repoPath = isOwner
+                ? $"/repos/{SourceOwner}/{SourceRepo}"
+                : $"/repos/{login}/{SourceRepo}";
+
+            using var resp = await SendApiAsync(HttpMethod.Get, repoPath, token);
+            if (resp.StatusCode == System.Net.HttpStatusCode.NotFound && !isOwner)
+            {
+                // 尚未 fork：放行，fork 后对自有仓库天然可写
+                return new PatValidation { IsValid = true, Login = login, CanWrite = false };
+            }
+            if (!resp.IsSuccessStatusCode)
+            {
+                LastError = $"HTTP {(int)resp.StatusCode}";
+                return new PatValidation { IsValid = false, Login = login, Error = LastError };
+            }
+
+            var json = await resp.Content.ReadAsStringAsync();
+            if (!ParsePermissionsPush(json))
+                return new PatValidation { IsValid = false, Login = login, Error = BuildPatScopeHint() };
+
+            return new PatValidation { IsValid = true, Login = login, CanWrite = true };
+        }
+        catch (Exception ex)
+        {
+            LastError = "网络错误：" + ex.Message;
+            return new PatValidation { IsValid = false, Error = LastError };
+        }
+    }
+
     // ---------- 部署状态检测 ----------
 
     /// <summary>
