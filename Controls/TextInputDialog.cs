@@ -28,15 +28,15 @@ public class TextInputDialog : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(540, 280);
+        ClientSize = new Size(560, 320);
         BackColor = Color.White;
         ForeColor = TextMain;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 4, BackColor = Color.White };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));   // 说明
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));  // 说明
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));   // 输入行
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));   // 显示/粘贴 工具行
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // 按钮行
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));   // 按钮行
 
         var lblHint = new Label
         {
