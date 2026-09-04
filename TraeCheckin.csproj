@@ -11,8 +11,9 @@
     <Version>1.4.4</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>app.ico</ApplicationIcon>
-    <!-- 统一构建产物输出目录（主程序 + 启动器都输出到这里） -->
-    <OutputPath>C:\Users\星梦\Desktop\插件开发\TraeCheckin开发\</OutputPath>
+    <!-- 统一构建产物输出目录（主程序 + 启动器都输出到这里）。
+         使用仓库内相对路径，避免写死到个人账号目录。 -->
+    <OutputPath>bin\TraeCheckin\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
