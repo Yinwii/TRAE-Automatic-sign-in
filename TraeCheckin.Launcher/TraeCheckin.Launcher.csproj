@@ -16,8 +16,9 @@
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>..\app.ico</ApplicationIcon>
-    <!-- 统一构建产物输出目录：启动器单文件发布到这里，与主程序同目录 -->
-    <PublishDir>C:\Users\星梦\Desktop\插件开发\TraeCheckin开发\</PublishDir>
+    <!-- 统一构建产物输出目录：启动器单文件发布到仓库根 bin\TraeCheckin，与主程序同目录。
+         使用仓库内相对路径，避免写死到个人账号目录。 -->
+    <PublishDir>..\bin\TraeCheckin\</PublishDir>
   </PropertyGroup>
 
 </Project>
