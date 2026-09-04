@@ -1,0 +1,73 @@
+name: Build & Auto Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      # 解析当前 tag 与上一 v* tag（dispatch 无 tag 时取仓库最高 v tag）
+      - name: Resolve tags
+        id: version
+        shell: pwsh
+        run: |
+          $all = @(git tag --list 'v*' --sort=-v:refname)
+          $tag = $null
+          if ($env:GITHUB_EVENT_NAME -eq "push") { $tag = $env:GITHUB_REF_NAME }
+          if (-not $tag -and $all.Count -gt 0) { $tag = $all[0] }
+          if (-not $tag) { throw "未找到 v* tag，请先打 tag 再触发" }
+          $prev = $all | Where-Object { $_ -ne $tag } | Select-Object -First 1
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PREV_TAG=$prev" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "release tag=$tag prev=$prev"
+
+      - name: Build main app
+        shell: pwsh
+        run: dotnet build TraeCheckin.csproj -c Release --nologo
+
+      - name: Publish launcher (self-contained)
+        shell: pwsh
+        run: dotnet publish TraeCheckin.Launcher\TraeCheckin.Launcher.csproj -c Release --nologo
+
+      - name: Generate changelog
+        shell: pwsh
+        run: |
+          if ($env:PREV_TAG) {
+            $log = git log "$env:PREV_TAG..$env:TAG" --pretty=format:"- %s" --no-merges
+          } else {
+            $log = git log --pretty=format:"- %s" --no-merges
+          }
+          $body = "## Changelog`r`n" + ($log -join "`r`n")
+          [System.IO.File]::WriteAllText(
+            "$env:RUNNER_TEMP\notes.md",
+            $body,
+            [System.Text.UTF8Encoding]::new($false))
+
+      - name: Package zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "bin\TraeCheckin\*" -DestinationPath "TraeCheckin-$env:TAG-win-x64.zip" -Force
+          Get-Item "TraeCheckin-$env:TAG-win-x64.zip" | Select-Object Name,Length
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create $env:TAG "TraeCheckin-$env:TAG-win-x64.zip" --title $env:TAG --notes-file "$env:RUNNER_TEMP\notes.md"
