@@ -54,6 +54,8 @@ public partial class MainForm : Form
     private Label _lblLastCheckin = new();
 
     private System.Windows.Forms.Timer _autoTimer = new();
+    /// <summary>签到进行中标志：防止手动按钮、托盘菜单、自动定时器三路并发触发同一轮签到。</summary>
+    private bool _checkinBusy;
     private DateTime _lastAutoCheck = DateTime.MinValue;
     private bool _allowClose;
 
@@ -841,34 +843,47 @@ public partial class MainForm : Form
 
     private async Task DoCheckinAsync()
     {
-        var enabled = _accountStore.EnabledAccounts().ToList();
-        if (enabled.Count == 0)
+        if (_checkinBusy)
         {
-            SetLog("没有可签到的账号，请先在设置页添加账号。");
+            SetLog("签到正在进行中，请稍候（已忽略本次重复触发）。");
             return;
         }
-        // 兜底：签到前确保每个账号都有不重复的 16 位设备号（缺号/重复会触发风控 9074）
-        foreach (var acc in enabled)
+        _checkinBusy = true;
+        try
         {
-            if (string.IsNullOrWhiteSpace(acc.DeviceId))
+            var enabled = _accountStore.EnabledAccounts().ToList();
+            if (enabled.Count == 0)
             {
-                _accountStore.EnsureDeviceId(acc);
-                _config.Save();
+                SetLog("没有可签到的账号，请先在设置页添加账号。");
+                return;
             }
-        }
-        SetLog($"开始为 {enabled.Count} 个账号签到…");
+            // 兜底：签到前确保每个账号都有不重复的 16 位设备号（缺号/重复会触发风控 9074）
+            foreach (var acc in enabled)
+            {
+                if (string.IsNullOrWhiteSpace(acc.DeviceId))
+                {
+                    _accountStore.EnsureDeviceId(acc);
+                    _config.Save();
+                }
+            }
+            SetLog($"开始为 {enabled.Count} 个账号签到…");
 
-        var results = new List<(TraeAccount Acc, bool Ok, double Gained, double Remaining)>();
-        foreach (var acc in enabled)
+            var results = new List<(TraeAccount Acc, bool Ok, double Gained, double Remaining)>();
+            foreach (var acc in enabled)
+            {
+                await CheckinOneAsync(acc, results);
+            }
+
+            // 本地飞书推送：多账号汇总成一条
+            await NotifyFeishuBatchAsync(results);
+
+            SetLog("本轮全部账号签到结束。");
+            await RefreshAllAsync();
+        }
+        finally
         {
-            await CheckinOneAsync(acc, results);
+            _checkinBusy = false;
         }
-
-        // 本地飞书推送：多账号汇总成一条
-        await NotifyFeishuBatchAsync(results);
-
-        SetLog("本轮全部账号签到结束。");
-        await RefreshAllAsync();
     }
 
     private async Task CheckinOneAsync(TraeAccount acc, List<(TraeAccount, bool, double, double)> results)
