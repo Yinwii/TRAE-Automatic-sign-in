@@ -9,25 +9,35 @@
 **Tech Stack:** C# / .NET 9 / WinForms / xUnit（测试目录 `TraeCheckin.Tests` 在仓库外，用 `-p:OutputPath` 覆盖运行）。
 
 **测试运行命令（贯穿全计划）：**
+
 ```
 & "C:\Program Files\dotnet\dotnet.exe" test --nologo -p:OutputPath="$env:TEMP\traebuild_multi" -v q
 ```
+
 **编译命令：** `& "C:\Program Files\dotnet\dotnet.exe" build TraeCheckin.csproj -c Release --nologo`
 
 **关键既有代码：**
+
 - `Config/AppConfig.cs` — `Token/Session/DeviceId/TokenUpdatedAt/LastCheckinDate` 单账号字段；`Load()`(L32-59) 与 `Save()`(L98)。
+
 - `Api/TraeApiClient.cs` — `_deviceId` 字段(L30)、构造(L34)、`BuildRequest`(L42-55) 内部用 `_deviceId`；公开方法 `GetStatusAsync/ClaimAsync/GetRemainingCreditsAsync(string token)`、`GetUserTokenAsync(string session)`。
+
 - `Forms/MainForm.cs` — `_api`(L17)、`_userDataDir`(L18/L79-80)、`_config`(L16)；`OnShown`(L588)、`CheckAutoCheckinAsync`(L605)、`RefreshAllAsync`(L622)、`RefreshCloudStatusAsync`(L651)、`DoCheckinAsync`(L700)、`GetStatusWithValidTokenAsync`(L774)、`LoginAndRefreshAsync`(L806)、`UpdateTokenDisplay`(L423)、`BuildAccountRow`(L472-488)、`CopyToken`(L405)。
+
 - `Forms/LoginForm.cs` — 构造 `(userDataDir, initialToken, onToken)`(L20)。
+
 - `Program.cs` / `MainForm` 构造 `ClientSize = new Size(900, 720)`(MainForm.cs L83)。
 
----
+***
 
 ## Task 1: `TraeAccount` 模型 + 迁移（TDD）
 
 **Files:**
+
 - Create: `Config/TraeAccount.cs`
+
 - Modify: `Config/AppConfig.cs`
+
 - Test: `TraeCheckin.Tests/AccountTests.cs`（新建）
 
 - [ ] **Step 1: 写失败测试**
@@ -205,13 +215,15 @@ Expected: 新增 3 用例通过。
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" add Config/TraeAccount.cs Config/AppConfig.cs
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新增 TraeAccount 模型与单账号→多账号迁移"
 ```
+
 > 测试文件在仓库外无需 add。
 
----
+***
 
 ## Task 2: `TraeApiClient` 每请求传 deviceId
 
 **Files:**
+
 - Modify: `Api/TraeApiClient.cs`
 
 - [ ] **Step 1: 去掉构造绑定的 deviceId，改为方法参数**
@@ -219,6 +231,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 在 `Api/TraeApiClient.cs` 中做三处替换。
 
 (1) 删除字段与构造参数：
+
 ```csharp
     private readonly HttpClient _http;
     private readonly string _deviceId;
@@ -232,7 +245,9 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.0");
     }
 ```
+
 →
+
 ```csharp
     private readonly HttpClient _http;
 
@@ -246,6 +261,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 ```
 
 (2) `BuildRequest` 签名与 deviceId 用法：
+
 ```csharp
     internal HttpRequestMessage BuildRequest(HttpMethod method, string path, string? token, string? body)
     {
@@ -262,7 +278,9 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
         return req;
     }
 ```
+
 →
+
 ```csharp
     internal HttpRequestMessage BuildRequest(HttpMethod method, string path, string? token, string deviceId, string? body)
     {
@@ -281,6 +299,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 ```
 
 (3) 三个公开方法补 deviceId 参数并透传：
+
 ```csharp
     public async Task<CheckinStatus?> GetStatusAsync(string token)
     {
@@ -294,7 +313,9 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
         return await SendAsync<CheckinStatus>(req);
     }
 ```
+
 →
+
 ```csharp
     public async Task<CheckinStatus?> GetStatusAsync(string token, string deviceId)
     {
@@ -310,12 +331,15 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 ```
 
 以及：
+
 ```csharp
     public async Task<double> GetRemainingCreditsAsync(string token)
     {
         using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/pay/user_current_entitlement_list", token, "{}");
 ```
+
 →
+
 ```csharp
     public async Task<double> GetRemainingCreditsAsync(string token, string deviceId)
     {
@@ -335,14 +359,17 @@ Expected: 报错位置全部在 `Forms/MainForm.cs`（`_api.GetStatusAsync/Claim
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" add Api/TraeApiClient.cs
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "refactor: TraeApiClient 改为每请求传入 deviceId，支持多账号独立设备号"
 ```
+
 > 注：此提交暂时不通过 MainForm 编译；Task 3 结束再整仓编译。若你偏好每提交可编译，可先跳过本步、Task 3 完成后再连同提交。
 
----
+***
 
 ## Task 3: `AccountStore` 辅助服务（TDD）
 
 **Files:**
+
 - Create: `Services/AccountStore.cs`
+
 - Test: `TraeCheckin.Tests/AccountStoreTests.cs`（新建）
 
 - [ ] **Step 1: 写失败测试**
@@ -518,11 +545,12 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" add Services/AccountSt
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新增 AccountStore 账号辅助服务（激活/启用列表/增删/DeviceId 兜底）"
 ```
 
----
+***
 
 ## Task 4: MainForm 本地签到多账号化
 
 **Files:**
+
 - Modify: `Forms/MainForm.cs`
 
 **目标：** 把「登录 / 换 token / 立即签到 / 自动签到 / 历史」全部改为面向账号；多账号各签各的。涉及多段代码，用以下 5 组替换逐步完成，每完成一组编译一次。
@@ -567,7 +595,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
         => _config.Accounts.Count > 0 ? _accountStore.ActiveAccount : null;
 ```
 
-- [ ] **Step 3: `GetStatusWithValidTokenAsync` / `LoginAndRefreshAsync` 面向账号**
+- [ ] **Step 3:** **`GetStatusWithValidTokenAsync`** **/** **`LoginAndRefreshAsync`** **面向账号**
 
 将 `GetStatusWithValidTokenAsync()`(L774-804) 整体替换为接收账号的版本，并新增调用辅助：
 
@@ -630,7 +658,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
     }
 ```
 
-- [ ] **Step 4: `RefreshAllAsync` 面向激活账号**
+- [ ] **Step 4:** **`RefreshAllAsync`** **面向激活账号**
 
 替换 `RefreshAllAsync()`(L622-648)：
 
@@ -674,7 +702,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
     }
 ```
 
-- [ ] **Step 5: `DoCheckinAsync` 遍历所有启用账号**
+- [ ] **Step 5:** **`DoCheckinAsync`** **遍历所有启用账号**
 
 替换 `DoCheckinAsync()`(L700-753)：
 
@@ -774,12 +802,13 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 > 保留旧的 `NotifyNativeCheckin(bool, double, double)` 单账号重载供托盘手动调用，另加 `NotifyNativeCheckin(bool success, string accountName, double gainedCredits, double remaining)` 重载（内部同实现，仅标题带账号名）。若不需托盘逐账号气泡，可简化为不新增重载——`CheckinOneAsync` 中调用处使用带 name 重载。
 
 同时新增 `DisplayName`：
+
 ```csharp
     private static string DisplayName(TraeAccount acc)
         => string.IsNullOrWhiteSpace(acc.Name) ? "账号 " + (acc.Id[..4].ToUpperInvariant()) : acc.Name!;
 ```
 
-- [ ] **Step 6: `CheckAutoCheckinAsync` 改为「到点后为所有启用账号签到」**
+- [ ] **Step 6:** **`CheckAutoCheckinAsync`** **改为「到点后为所有启用账号签到」**
 
 替换 `CheckAutoCheckinAsync()`(L605-620)：
 
@@ -800,11 +829,13 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
         await DoCheckinAsync();
     }
 ```
+
 （DoCheckinAsync 内部已遍历启用账号，定时器无需重复逻辑。）
 
 - [ ] **Step 7: 历史与文案适配**
 
 - 新增 `RecordCheckin(TraeAccount, double)` 重载，替换原 `RecordCheckin(double)` 调用：
+
 ```csharp
     private void RecordCheckin(TraeAccount account, double credits)
     {
@@ -813,9 +844,11 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
         AppendHistory(DateTime.Now, credits, DisplayName(account));
     }
 ```
+
 原 `RecordCheckin(double)`（无账号）删除。
 
 - `AppendHistory` 改为带可选账号名前缀（兼容旧行）：
+
 ```csharp
     private void AppendHistory(DateTime time, double credits, string accountName)
     {
@@ -831,6 +864,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 ```
 
 - `UpdateTokenDisplay()` 面向激活账号：
+
 ```csharp
     private void UpdateTokenDisplay()
     {
@@ -843,6 +877,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 新�
 ```
 
 - `CopyToken()` 内 `_config.Token` 改为激活账号 token：
+
 ```csharp
         var acc = CurAccount;
         if (acc == null || string.IsNullOrEmpty(acc.Token))
@@ -869,11 +904,12 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" add Forms/MainForm.cs 
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 本地签到改为遍历多账号，各账号独立 DeviceId/今日状态/历史前缀"
 ```
 
----
+***
 
 ## Task 5: 设置页账号管理 UI + 仪表盘适配
 
 **Files:**
+
 - Modify: `Forms/MainForm.cs`（字段区 / BuildSettings / BuildAccountRow / BuildTokenRow 标题 / 页面行高）
 
 **目标：** 「账号」卡改为可管理多账号（下拉 + 登录/添加/删除 + 会话倒计时），仪表盘标题与激活账号联动。
@@ -886,7 +922,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 本�
     private readonly ComboBox _cmbAccount = new();
 ```
 
-- [ ] **Step 2: 替换 `BuildAccountRow()`(L472-488)**
+- [ ] **Step 2: 替换** **`BuildAccountRow()`(L472-488)**
 
 整方法替换为：
 
@@ -1022,7 +1058,9 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 本�
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 ```
+
 改为（token 卡 150→140，账号卡 100→150，总高 +100，窗口已放大容纳）：
+
 ```csharp
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
@@ -1033,6 +1071,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 本�
 ```
 
 并把「登录 Token」「账号」两卡的标题带上激活账号名（区分当前查看谁的 token）。将：
+
 ```csharp
         var tokenPanel = CardPanel("登录 Token", BuildTokenRow());
         grid.Controls.Add(tokenPanel, 0, 2);
@@ -1040,7 +1079,9 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 本�
         var acctPanel = CardPanel("账号", BuildAccountRow());
         grid.Controls.Add(acctPanel, 0, 3);
 ```
+
 改为：
+
 ```csharp
         var tokenPanel = CardPanel("当前账号登录 Token", BuildTokenRow());
         grid.Controls.Add(tokenPanel, 0, 2);
@@ -1052,13 +1093,16 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 本�
 - [ ] **Step 4: OnShown 中按激活账号初始化**
 
 `OnShown`(L588) 内 `hasToken` 判定改为任一启用账号有 token：
+
 ```csharp
         var anyToken = _config.Accounts.Any(a => !string.IsNullOrEmpty(a.Token));
         SetLog($"程序已启动，已{(anyToken ? "登录" : "未登录，请在设置页添加/登录账号")}");
         await RefreshAllAsync();
         StartAutoTimer();
 ```
+
 `RefreshAccountCombo()` 也需在 `BuildSettings` 后执行一次——BuildAccountRow 已调用；若设置页惰性构建需在 ShowPage 切页刷新。为稳妥，在 `ShowPage(index)` 中当 `index==3` 时调用 `RefreshAccountCombo()`：
+
 ```csharp
         for (int i = 0; i < _pages.Count; i++)
         {
@@ -1081,7 +1125,7 @@ git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" add Forms/MainForm.cs
 git -C "c:\Users\星梦\Desktop\插件开发\TraeCheckin" commit -m "feat: 设置页新增多账号管理（下拉切换/添加/删除），窗口放大至 1200x780"
 ```
 
----
+***
 
 ## Task 6: 可行度验证（Phase 1 收尾）
 
@@ -1098,7 +1142,9 @@ Stop-Process -Name TraeCheckin -ErrorAction SilentlyContinue
 Copy-Item "bin\TraeCheckin\TraeCheckin.exe","bin\TraeCheckin\TraeCheckin.dll","bin\TraeCheckin\TraeCheckin.pdb","bin\TraeCheckin\TraeCheckin.deps.json","bin\TraeCheckin\TraeCheckin.runtimeconfig.json" "..\TraeCheckin开发\" -Force
 Start-Process "..\TraeCheckin开发\TraeCheckin.exe"
 ```
+
 验证（GUI，需用户配合）：
+
 1. 窗口明显变大（1200×780）。
 2. 旧单账号配置启动后自动进入「账号1」，可正常查看状态。
 3. 设置页「多账号管理」下拉可见，点「添加账号」→ 弹出独立登录窗，登录第二账号成功后列表出现两账号；切下拉仪表盘数据随之切换。
@@ -1108,25 +1154,39 @@ Start-Process "..\TraeCheckin开发\TraeCheckin.exe"
 
 向用户汇报测试数、编译结果、GUI 冒烟结果、遗留问题（若有）；并预告 Phase 2（云端多账号）将单独规划。
 
----
+***
 
 ## 自审记录
 
 **Spec 覆盖（Phase 1 部分）：**
+
 - TraeAccount 模型 + 旧字段兼容 → Task 1 ✅
+
 - 一次性迁移（Load 中 TryMigrateLegacy）→ Task 1 ✅
+
 - deviceId 每账号独立（TraeApiClient 去单例绑定）→ Task 2 ✅
+
 - AccountStore 辅助 → Task 3 ✅
+
 - 本地签到遍历启用账号 + 各账号独立今日状态/历史前缀 → Task 4 ✅
+
 - WebView2 目录按账号隔离 → Task 4 Step1 AccountWebViewDir + Task5 删除时清理 ✅
+
 - 设置页账号管理区（下拉/添加/删除）→ Task 5 ✅
+
 - 主窗口放大 → Task 4 Step1（1200×780）✅
+
 - 仪表盘随激活账号刷新 → Task 4 RefreshAllAsync + Task5 OnAccountSelected ✅
 
 **Type/命名一致性：** `TraeAccount{Id,Name,Token,Session,DeviceId,TokenUpdatedAt,LastCheckinDate,Enabled}`；`AccountStore{ActiveAccount,EnabledAccounts,SetActive,AddNew,Remove,EnsureDeviceId}`；`CurAccount`、`DisplayName`、`AccountWebViewDir`、`RefreshAccountCombo`、`ComboText`、`OnAccountSelected`、`AddAccountAsync`、`RemoveAccount`、`CheckinOneAsync`、`NotifyFeishuBatchAsync`、`RemainingOfAsync`、`RecordCheckin(TraeAccount,double)` 在文中首用处即定义，无悬空引用。
 
 **已知风险：**
+
 - `AppConfig.Load()` 现在 Save 于迁移与 Aha 两处——保持现有行为，勿重复清理。
+
 - 手动托盘「立即签到」走无参 `DoCheckinAsync`，遍历逻辑已在其中，无需额外改。
+
 - `LoginAndRefreshAsync(CurAccount)` 空引用：Task5 btnLogin2 已判 `CurAccount != null`；Task4 Step3 由调用方保证传非空账号。
+
 - 历史文件旧行无前缀：ReloadHistory 原样展示，不强制迁移（可读性可接受）。
+
