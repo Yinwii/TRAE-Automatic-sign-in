@@ -21,4 +21,9 @@ public class TraeAccount
     public DateTime? LastCheckinDate { get; set; }
     /// <summary>是否参与本地自动签到与云端部署。</summary>
     public bool Enabled { get; set; } = true;
+    /// <summary>
+    /// 是否会员：非会员每日签到只获得基础 credits（实测 150），
+    /// extra_credits（连签 +50）仅会员到账。默认 false。
+    /// </summary>
+    public bool IsMember { get; set; }
 }

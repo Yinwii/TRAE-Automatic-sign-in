@@ -43,6 +43,8 @@ public partial class MainForm : Form
 
     // 账号管理（设置页）
     private readonly ComboBox _cmbAccount = new();
+    private readonly CheckBox _chkMember = new() { Text = "会员（连签 +50 到账）", AutoSize = true, ForeColor = TextMain };
+    private bool _syncingMember;
 
     // 飞书通知（设置页）
     private readonly TextBox _txtWebhook = new();
@@ -59,10 +61,20 @@ public partial class MainForm : Form
     private DateTime _lastAutoCheck = DateTime.MinValue;
     private bool _allowClose;
 
-    private static string HistoryPath =>
+    /// <summary>账号签到历史文件（%APPDATA%\TraeCheckin\history_&lt;accountId&gt;.txt）。</summary>
+    private static string HistoryPathFor(string accountId) =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "history_" + accountId + ".txt");
+
+    /// <summary>账号总积分趋势文件（%APPDATA%\TraeCheckin\credits_total_&lt;accountId&gt;.txt）。</summary>
+    private static string TotalHistoryPathFor(string accountId) =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "credits_total_" + accountId + ".txt");
+
+    /// <summary>多账号改造前的全局历史文件（迁移源）。</summary>
+    private static string LegacyHistoryPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "history.txt");
 
-    private static string TotalHistoryPath =>
+    /// <summary>多账号改造前的全局总积分文件（迁移源）。</summary>
+    private static string LegacyTotalHistoryPath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin", "credits_total.txt");
 
     private static readonly Icon AppIcon = LoadAppIcon();
@@ -89,6 +101,8 @@ public partial class MainForm : Form
         _api = new TraeApiClient();
         _userDataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TraeCheckin", "WebView");
+
+        MigrateLegacyHistoryFiles();
 
         Text = "Trae 每日签到助手";
         ClientSize = new Size(1200, 780);
@@ -519,8 +533,11 @@ public partial class MainForm : Form
 
         table.Controls.Add(top, 0, 0);
 
-        // 第二行：提示文字独占一行，避免与按钮同排被挤截
+        // 第二行：会员开关 + 提示文字独占一行，避免与按钮同排被挤截
         var hintRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+        _chkMember.Margin = new Padding(0, 12, 14, 0);
+        _chkMember.CheckedChanged += (_, _) => OnMemberToggled();
+        hintRow.Controls.Add(_chkMember);
         var lbl = new Label { Text = "切换账号即刷新仪表盘。", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
         hintRow.Controls.Add(lbl);
         table.Controls.Add(hintRow, 0, 1);
@@ -537,7 +554,28 @@ public partial class MainForm : Form
             _cmbAccount.Items.Add(ComboText(a));
         int idx = _config.Accounts.FindIndex(a => a.Id == prev);
         _cmbAccount.SelectedIndex = idx >= 0 ? idx : (_config.Accounts.Count > 0 ? 0 : -1);
+        SyncMemberCheckbox();
         UpdateTokenDisplay();
+    }
+
+    /// <summary>把当前激活账号的会员状态同步到 CheckBox（不触发持久化事件）。</summary>
+    private void SyncMemberCheckbox()
+    {
+        var acc = CurAccount;
+        _syncingMember = true;
+        try { _chkMember.Checked = acc != null && acc.IsMember; }
+        finally { _syncingMember = false; }
+    }
+
+    /// <summary>会员开关变更：写入当前激活账号并保存配置。</summary>
+    private void OnMemberToggled()
+    {
+        if (_syncingMember) return;
+        var acc = CurAccount;
+        if (acc == null) return;
+        acc.IsMember = _chkMember.Checked;
+        _config.Save();
+        SetLog($"[{DisplayName(acc)}] 会员标记已改为：{(acc.IsMember ? "是（连签 +50 到账）" : "否（仅基础积分）")}");
     }
 
     private string ComboText(TraeAccount a)
@@ -780,13 +818,17 @@ public partial class MainForm : Form
                 ? (status.checked_in ? "今日已签到 ✓" : "今日可签到")
                 : "签到功能未开启";
             _lblStatus.ForeColor = status.checked_in ? Color.FromArgb(16, 185, 129) : Color.FromArgb(245, 158, 11);
-            _lblReward.Text = status.credits > 0 ? $"{status.credits:0} 积分" : "—";
+            // 单日可得：非会员仅基础 credits；会员另加连签 extra_credits（实测 150+50）
+            var daily = status.credits + (acc.IsMember ? status.extra_credits : 0);
+            _lblReward.Text = daily > 0 ? $"{daily:0} 积分" : "—";
         }
         else _lblStatus.Text = "获取失败";
 
         // 每天首次刷新时记录当前总积分（当前激活账号），便于趋势图立即有数据
-        if (remaining >= 0 && !TotalHistoryHasToday())
-            AppendTotalHistory(DateTime.Now, remaining);
+        if (remaining >= 0 && !TotalHistoryHasToday(acc))
+            AppendTotalHistory(acc, DateTime.Now, remaining);
+
+        ReloadHistory();   // 切换账号后同步刷新趋势图/连签天数/历史列表
 
         await RefreshCloudStatusAsync();
     }
@@ -893,10 +935,11 @@ public partial class MainForm : Form
         if (status != null && status.checked_in)
         {
             SetLog($"[{name}] 今日已签到，无需重复签到。");
+            var already = CheckinEvaluator.ResolveGainedCredits(status, acc.IsMember);
             if (acc.LastCheckinDate != DateTime.Today)
-                RecordCheckin(acc, status.credits);
+                RecordCheckin(acc, already);
             var rem = await RemainingOfAsync(acc);
-            results.Add((acc, true, status.credits, rem));
+            results.Add((acc, true, already, rem));
             return;
         }
         if (string.IsNullOrEmpty(acc.Token))
@@ -914,13 +957,13 @@ public partial class MainForm : Form
             return;
         }
         var after = await _api.GetStatusAsync(acc.Token, acc.DeviceId);
-        var gained = CheckinEvaluator.ResolveGainedCredits(after ?? result);
+        var gained = CheckinEvaluator.ResolveGainedCredits(after ?? result, acc.IsMember);
         if (gained > 0)
         {
             SetLog($"[{name}] 签到成功！获得 {gained:0} 积分。");
             RecordCheckin(acc, gained);
             var total = await RemainingOfAsync(acc);
-            if (total >= 0 && acc.Id == CurAccount?.Id) AppendTotalHistory(DateTime.Now, total);
+            if (total >= 0 && acc.Id == CurAccount?.Id) AppendTotalHistory(acc, DateTime.Now, total);
             results.Add((acc, true, gained, total));
             NotifyNativeCheckin(true, name, gained, total);
         }
@@ -1060,65 +1103,114 @@ public partial class MainForm : Form
         _log.TopIndex = _log.Items.Count - 1;
     }
 
+    /// <summary>
+    /// 一次性迁移：把多账号改造前的全局 history.txt / credits_total.txt 拆分到各账号独立文件。
+    /// history.txt 中带 [账号名] 前缀的行归到对应账号；无前缀的旧单账号行归到首个启用账号。
+    /// 迁移完成后原文件改名 .migrated，避免重复迁移。
+    /// </summary>
+    private void MigrateLegacyHistoryFiles()
+    {
+        try
+        {
+            if (_config.Accounts.Count == 0) return;
+            var fallback = _config.Accounts.FirstOrDefault(a => a.Enabled) ?? _config.Accounts[0];
+
+            // 1) history.txt 按 [账号名] 前缀拆分
+            if (File.Exists(LegacyHistoryPath))
+            {
+                foreach (var line in File.ReadAllLines(LegacyHistoryPath))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var target = fallback;
+                    int bIdx = line.IndexOf('[');
+                    int eIdx = bIdx >= 0 ? line.IndexOf(']', bIdx) : -1;
+                    if (bIdx >= 0 && eIdx > bIdx)
+                    {
+                        var name = line.Substring(bIdx + 1, eIdx - bIdx - 1);
+                        var hit = _config.Accounts.FirstOrDefault(a => DisplayName(a) == name);
+                        if (hit != null) target = hit;
+                    }
+                    var dir = Path.GetDirectoryName(HistoryPathFor(target.Id));
+                    Directory.CreateDirectory(dir!);
+                    File.AppendAllText(HistoryPathFor(target.Id), line + Environment.NewLine);
+                }
+                File.Move(LegacyHistoryPath, LegacyHistoryPath + ".migrated", overwrite: true);
+            }
+
+            // 2) credits_total.txt 是旧单账号时期数据，整体归首个账号
+            if (File.Exists(LegacyTotalHistoryPath))
+            {
+                var dir = Path.GetDirectoryName(TotalHistoryPathFor(fallback.Id));
+                Directory.CreateDirectory(dir!);
+                File.Copy(LegacyTotalHistoryPath, TotalHistoryPathFor(fallback.Id), overwrite: true);
+                File.Move(LegacyTotalHistoryPath, LegacyTotalHistoryPath + ".migrated", overwrite: true);
+            }
+        }
+        catch { /* 迁移失败不阻断启动，历史稍后从空开始 */ }
+    }
+
     private void RecordCheckin(TraeAccount account, double credits)
     {
         account.LastCheckinDate = DateTime.Today;
         _config.Save();
-        AppendHistory(DateTime.Now, credits, DisplayName(account));
+        AppendHistory(account, DateTime.Now, credits, DisplayName(account));
     }
 
-    private void AppendHistory(DateTime time, double credits, string accountName)
+    private void AppendHistory(TraeAccount account, DateTime time, double credits, string accountName)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(HistoryPath)!);
-            File.AppendAllText(HistoryPath,
+            Directory.CreateDirectory(Path.GetDirectoryName(HistoryPathFor(account.Id))!);
+            File.AppendAllText(HistoryPathFor(account.Id),
                 $"{time:yyyy-MM-dd HH:mm}  [{accountName}]  签到成功  +{credits:0} 积分{Environment.NewLine}");
         }
         catch { }
         ReloadHistory();
     }
 
-    /// <summary>记录一次签到后的总积分余额，用于绘制积分趋势图。</summary>
-    private void AppendTotalHistory(DateTime time, double total)
+    /// <summary>记录一次签到后的总积分余额，用于绘制该账号的积分趋势图。</summary>
+    private void AppendTotalHistory(TraeAccount account, DateTime time, double total)
     {
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(TotalHistoryPath)!);
-            File.AppendAllText(TotalHistoryPath, $"{time:yyyy-MM-dd},{total:0.##}{Environment.NewLine}");
+            Directory.CreateDirectory(Path.GetDirectoryName(TotalHistoryPathFor(account.Id))!);
+            File.AppendAllText(TotalHistoryPathFor(account.Id), $"{time:yyyy-MM-dd},{total:0.##}{Environment.NewLine}");
         }
         catch { }
-        _chart.SetData(ParseTotalHistory());
+        ReloadHistory();
     }
 
     private void ReloadHistory()
     {
         try
         {
-            var lines = File.Exists(HistoryPath) ? File.ReadAllLines(HistoryPath).Reverse().ToList() : new List<string>();
+            var acc = CurAccount;
+            var file = acc != null ? HistoryPathFor(acc.Id) : null;
+            var lines = (file != null && File.Exists(file)) ? File.ReadAllLines(file).Reverse().ToList() : new List<string>();
             _historyList.Items.Clear();
             foreach (var line in lines)
                 _historyList.Items.Add(line);
-            var acc = CurAccount;
             _lblLastCheckin.Text = acc != null && acc.LastCheckinDate.HasValue
                 ? $"最近签到（{DisplayName(acc)}）：{acc.LastCheckinDate:yyyy-MM-dd}"
                 : "暂无签到记录";
         }
         catch { }
 
-        var history = ParseHistory();
+        var acc2 = CurAccount;
+        var history = acc2 != null ? ParseHistory(acc2) : new List<(DateTime, double)>();
         _lblStreak.Text = ComputeStreak(history) + " 天";
-        _chart.SetData(ParseTotalHistory());
+        _chart.SetData(acc2 != null ? ParseTotalHistory(acc2) : new List<(DateTime, double)>());
     }
 
-    /// <summary>解析签到历史，返回 (日期, 积分) 列表。</summary>
-    private List<(DateTime Date, double Credits)> ParseHistory()
+    /// <summary>解析某账号签到历史，返回 (日期, 积分) 列表。</summary>
+    private List<(DateTime Date, double Credits)> ParseHistory(TraeAccount account)
     {
         var result = new List<(DateTime, double)>();
         try
         {
-            if (!File.Exists(HistoryPath)) return result;
-            foreach (var line in File.ReadAllLines(HistoryPath))
+            var file = HistoryPathFor(account.Id);
+            if (!File.Exists(file)) return result;
+            foreach (var line in File.ReadAllLines(file))
             {
                 if (line.Length < 10) continue;
                 if (!DateTime.TryParseExact(line.Substring(0, 10), "yyyy-MM-dd", null,
@@ -1140,14 +1232,15 @@ public partial class MainForm : Form
         return result;
     }
 
-    /// <summary>解析总积分历史（credits_total.txt，每行 yyyy-MM-dd,总积分）。</summary>
-    private List<(DateTime Date, double Credits)> ParseTotalHistory()
+    /// <summary>解析某账号总积分历史（credits_total_&lt;id&gt;.txt，每行 yyyy-MM-dd,总积分）。</summary>
+    private List<(DateTime Date, double Credits)> ParseTotalHistory(TraeAccount account)
     {
         var result = new List<(DateTime, double)>();
         try
         {
-            if (!File.Exists(TotalHistoryPath)) return result;
-            foreach (var line in File.ReadAllLines(TotalHistoryPath))
+            var file = TotalHistoryPathFor(account.Id);
+            if (!File.Exists(file)) return result;
+            foreach (var line in File.ReadAllLines(file))
             {
                 var idx = line.IndexOf(',');
                 if (idx <= 0) continue;
@@ -1161,11 +1254,11 @@ public partial class MainForm : Form
         return result;
     }
 
-    /// <summary>今天是否已记录过总积分（用于每天只补记一次）。</summary>
-    private bool TotalHistoryHasToday()
+    /// <summary>该账号今天是否已记录过总积分（用于每天只补记一次）。</summary>
+    private bool TotalHistoryHasToday(TraeAccount account)
     {
         var today = DateTime.Today;
-        foreach (var (date, _) in ParseTotalHistory())
+        foreach (var (date, _) in ParseTotalHistory(account))
             if (date.Date == today) return true;
         return false;
     }
