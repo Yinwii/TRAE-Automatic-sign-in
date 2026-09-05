@@ -580,6 +580,13 @@ public partial class MainForm : Form
             _config.Save();
         }
         RefreshAccountCombo();
+
+        // 期望「添加后当日即签」：登录成功后立即让新账号参与签到
+        // （今日已签则记录历史；未签则当场补签并输出日志）
+        SetLog("正在检查新账号今日签到状态…");
+        var immediate = new List<(TraeAccount, bool, double, double)>();
+        await CheckinOneAsync(acc, immediate);
+
         await RefreshAllAsync();
         SetLog("已添加账号 " + DisplayName(acc));
     }
