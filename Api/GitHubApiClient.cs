@@ -31,6 +31,8 @@ public class DeploymentStatus
     public bool IsForked { get; set; }
     /// <summary>TRAE_SESSION 与 TRAE_DEVICE_ID 两个 secret 是否都已写入。</summary>
     public bool HasSecrets { get; set; }
+    /// <summary>已部署（session+device 成对存在）的连续账号数；0 表示尚未写入。</summary>
+    public int DeployedAccountCount { get; set; }
     /// <summary>checkin.yml 定时 workflow 是否已启用（state=active）。</summary>
     public bool IsWorkflowEnabled { get; set; }
     /// <summary>是否已完成一次完整部署（fork + secrets + workflow 全部就绪）。</summary>
@@ -73,6 +75,15 @@ public class GitHubApiClient
     public const string SessionSecretName = "TRAE_SESSION";
     public const string DeviceIdSecretName = "TRAE_DEVICE_ID";
     public const string FeishuWebhookSecretName = "FEISHU_WEBHOOK";
+
+    /// <summary>第 index 个（从 1 起）账号的 Session secret 名；1 → TRAE_SESSION，N → TRAE_SESSION_N。</summary>
+    public static string SessionSecretNameFor(int index)
+        => index <= 1 ? SessionSecretName : "TRAE_SESSION_" + index;
+
+    /// <summary>第 index 个（从 1 起）账号的 DeviceId secret 名；1 → TRAE_DEVICE_ID，N → TRAE_DEVICE_ID_N。</summary>
+    public static string DeviceSecretNameFor(int index)
+        => index <= 1 ? DeviceIdSecretName : "TRAE_DEVICE_ID_" + index;
+
     private const string WorkflowPath = ".github/workflows/checkin.yml";
 
     private readonly HttpClient _http;
@@ -427,7 +438,8 @@ public class GitHubApiClient
             result.IsForked = repoResp.IsSuccessStatusCode;
             if (!result.IsForked) return result;
 
-            result.HasSecrets = await HasSecretsAsync(token, login);
+            result.DeployedAccountCount = await CountDeployedAccountsAsync(token, login);
+            result.HasSecrets = result.DeployedAccountCount >= 1;
             result.IsWorkflowEnabled = await IsWorkflowEnabledAsync(token, login);
         }
         catch (Exception ex)
@@ -439,21 +451,47 @@ public class GitHubApiClient
         return result;
     }
 
-    /// <summary>检查 TRAE_SESSION / TRAE_DEVICE_ID 两个 secret 是否都已写入。</summary>
-    private async Task<bool> HasSecretsAsync(string token, string login)
+    /// <summary>拉取仓库全部 Actions secret 名；失败返回 null。</summary>
+    private async Task<HashSet<string>?> FetchSecretNamesAsync(string token, string login)
     {
         using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/secrets", token);
-        if (!resp.IsSuccessStatusCode) return false;
+        if (!resp.IsSuccessStatusCode) return null;
         var json = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("secrets", out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return false;
-
+            return null;
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (var s in arr.EnumerateArray())
             if (s.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
                 names.Add(n.GetString() ?? "");
-        return names.Contains(SessionSecretName) && names.Contains(DeviceIdSecretName);
+        return names;
+    }
+
+    /// <summary>
+    /// 统计已部署的连续账号数：账号 1 需要 TRAE_SESSION 与 TRAE_DEVICE_ID 都存在，
+    /// 之后依 TRAE_SESSION_2/TRAE_DEVICE_ID_2 … 递增，遇缺失即停止（返回前缀长度）。
+    /// </summary>
+    public async Task<int> CountDeployedAccountsAsync(string token, string login)
+    {
+        var names = await FetchSecretNamesAsync(token, login);
+        if (names == null) return 0;
+        int n = 1;
+        while (names.Contains(SessionSecretNameFor(n)) && names.Contains(DeviceSecretNameFor(n)))
+            n++;
+        return n - 1;
+    }
+
+    /// <summary>删除仓库某个 Actions secret；404（不存在）视为成功。删除失败返回 false。</summary>
+    public async Task<bool> DeleteSecretAsync(string token, string login, string secretName)
+    {
+        try
+        {
+            using var resp = await SendApiAsync(HttpMethod.Delete, $"/repos/{login}/{SourceRepo}/actions/secrets/{secretName}", token);
+            if (resp.IsSuccessStatusCode || resp.StatusCode == System.Net.HttpStatusCode.NotFound) return true;
+            LastError = $"删除 secret 失败：HTTP {(int)resp.StatusCode}";
+            return false;
+        }
+        catch (Exception ex) { LastError = ex.Message; return false; }
     }
 
     /// <summary>检查 checkin.yml workflow 是否已启用（state=active）。</summary>
