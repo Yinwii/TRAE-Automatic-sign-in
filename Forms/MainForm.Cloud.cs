@@ -220,7 +220,9 @@ public partial class MainForm
 
             if (status.IsDeployed)
             {
-                _lblCloudState.Text = "已部署完成，云端每天北京时间 8:00 自动签到";
+                _lblCloudState.Text = status.DeployedAccountCount >= 2
+                    ? $"已部署完成（{status.DeployedAccountCount} 个账号），云端每天北京时间 8:00 自动签到"
+                    : "已部署完成（1 个账号），云端每天北京时间 8:00 自动签到";
                 _btnCloudAction.Text = "重新部署";
             }
             else
@@ -346,21 +348,36 @@ public partial class MainForm
         _lblCloudCode.Visible = false;
     }
 
+    /// <summary>云端最多部署的账号数（与 checkin.yml 显式枚举一致，超限需扩 workflow）。</summary>
+    private const int CloudAccountLimit = 4;
+
     private async Task DeployAsync()
     {
-        // Phase 1：云端部署先按「当前激活账号」写入 secret；多账号逐一部署在 Phase 2 规划
-        var acc = CurAccount;
-        if (acc == null || string.IsNullOrEmpty(acc.Session))
+        var enabled = _accountStore.EnabledAccounts().ToList();
+        if (enabled.Count == 0)
         {
-            MessageBox.Show("尚未登录 Trae，请先到「设置」页添加/登录账号后再部署。", "提示",
+            MessageBox.Show("没有启用的 Trae 账号，请先到「设置」页添加/登录账号后再部署。", "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        if (string.IsNullOrEmpty(acc.DeviceId))
+        if (enabled.Any(a => string.IsNullOrEmpty(a.Session)))
         {
-            _accountStore.EnsureDeviceId(acc);
-            _config.Save();
+            MessageBox.Show("存在未登录的账号（缺少会话 Cookie），请先在「设置」页逐一登录后再部署。", "提示",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
         }
+        if (enabled.Count > CloudAccountLimit)
+        {
+            MessageBox.Show($"当前启用了 {enabled.Count} 个账号，云端部署上限为 {CloudAccountLimit} 个"
+                + "（受 checkin.yml 显式 secret 映射限制）。如需更多，请停用部分账号或扩展 workflow。",
+                "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        foreach (var a in enabled)
+        {
+            _accountStore.EnsureDeviceId(a);
+        }
+        _config.Save();
 
         _cloudBusy = true;
         _btnCloudAction.Enabled = false;
@@ -395,13 +412,32 @@ public partial class MainForm
             else
                 SetCloudLog("为源仓库点赞失败（可忽略）");
 
-            SetCloudLog("正在写入 TRAE_SESSION secret…");
-            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.SessionSecretName, acc.Session)) { HandleDeployFailure(); return; }
-            SetCloudLog("TRAE_SESSION 写入成功");
+            for (int i = 0; i < enabled.Count; i++)
+            {
+                var acc = enabled[i];
+                int idx = i + 1;
+                var sName = GitHubApiClient.SessionSecretNameFor(idx);
+                var dName = GitHubApiClient.DeviceSecretNameFor(idx);
 
-            SetCloudLog("正在写入 TRAE_DEVICE_ID secret…");
-            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.DeviceIdSecretName, acc.DeviceId)) { HandleDeployFailure(); return; }
-            SetCloudLog("TRAE_DEVICE_ID 写入成功");
+                SetCloudLog($"正在写入 {sName} secret…");
+                if (!await _ghApi.SetSecretAsync(token, login, sName, acc.Session)) { HandleDeployFailure(); return; }
+                SetCloudLog($"{sName} 写入成功");
+
+                SetCloudLog($"正在写入 {dName} secret…");
+                if (!await _ghApi.SetSecretAsync(token, login, dName, acc.DeviceId)) { HandleDeployFailure(); return; }
+                SetCloudLog($"{dName} 写入成功");
+            }
+
+            // 清理本次减少后遗留的多余 secret，避免云端误签已删除/停用的账号
+            for (int n = enabled.Count + 1; n <= CloudAccountLimit; n++)
+            {
+                var stale = GitHubApiClient.SessionSecretNameFor(n);
+                SetCloudLog($"正在清理多余 {stale} secret…");
+                if (!await _ghApi.DeleteSecretAsync(token, login, stale)) { HandleDeployFailure(); return; }
+                SetCloudLog($"{stale} 已清理");
+                var staleD = GitHubApiClient.DeviceSecretNameFor(n);
+                if (!await _ghApi.DeleteSecretAsync(token, login, staleD)) { HandleDeployFailure(); return; }
+            }
 
             if (!string.IsNullOrEmpty(_config.FeishuWebhook))
             {
@@ -430,8 +466,10 @@ public partial class MainForm
 
             if (conclusion == "success")
             {
-                SetCloudLog("部署成功！云端自动签到已就绪，GitHub 将每天北京时间 8:00 自动签到。");
-                _lblCloudState.Text = "已部署完成，云端每天自动签到";
+                SetCloudLog($"部署成功！{enabled.Count} 个账号已就绪，GitHub 将每天北京时间 8:00 自动签到。");
+                _lblCloudState.Text = enabled.Count >= 2
+                    ? $"已部署完成（{enabled.Count} 个账号），云端每天自动签到"
+                    : "已部署完成（1 个账号），云端每天自动签到";
                 _btnCloudAction.Text = "重新部署";
                 // 同步刷新仪表盘的云端签到状态，避免停留在旧的「未部署」
                 await RefreshCloudStatusAsync();
