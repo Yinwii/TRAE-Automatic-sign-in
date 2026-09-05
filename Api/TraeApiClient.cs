@@ -27,26 +27,24 @@ public class TraeApiClient
     private const string BaseUrl = "https://api.trae.cn";
 
     private readonly HttpClient _http;
-    private readonly string _deviceId;
 
     public string? LastError { get; private set; }
 
-    public TraeApiClient(string deviceId)
+    public TraeApiClient()
     {
-        _deviceId = deviceId;
         _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.0");
     }
 
     /// <summary>构造每请求的认证头。</summary>
-    internal HttpRequestMessage BuildRequest(HttpMethod method, string path, string? token, string? body)
+    internal HttpRequestMessage BuildRequest(HttpMethod method, string path, string? token, string deviceId, string? body)
     {
         var req = new HttpRequestMessage(method, BaseUrl + path);
         if (!string.IsNullOrEmpty(token))
             req.Headers.TryAddWithoutValidation("Authorization", "Cloud-IDE-JWT " + token);
         req.Headers.TryAddWithoutValidation("X-User-Region", "cn");
         // 风控关键：x-device-id 必须是 16 位数字 Aha 设备号；使用 GUID/UUID 会触发 9074（"参与用户太多"）
-        req.Headers.TryAddWithoutValidation("x-device-id", _deviceId);
+        req.Headers.TryAddWithoutValidation("x-device-id", deviceId);
         if (body != null)
         {
             req.Content = new StringContent(body, Encoding.UTF8, "application/json");
@@ -55,16 +53,16 @@ public class TraeApiClient
     }
 
     /// <summary>查询今日签到状态与单日奖励。</summary>
-    public async Task<CheckinStatus?> GetStatusAsync(string token)
+    public async Task<CheckinStatus?> GetStatusAsync(string token, string deviceId)
     {
-        using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/ug/checkin_credits/status", token, "{}");
+        using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/ug/checkin_credits/status", token, deviceId, "{}");
         return await SendAsync<CheckinStatus>(req);
     }
 
     /// <summary>执行每日签到。</summary>
-    public async Task<CheckinStatus?> ClaimAsync(string token)
+    public async Task<CheckinStatus?> ClaimAsync(string token, string deviceId)
     {
-        using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/ug/checkin_credits/claim", token, "{}");
+        using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/ug/checkin_credits/claim", token, deviceId, "{}");
         return await SendAsync<CheckinStatus>(req);
     }
 
@@ -100,9 +98,9 @@ public class TraeApiClient
     }
 
     /// <summary>查询剩余积分（汇总所有资格包的剩余额度）。</summary>
-    public async Task<double> GetRemainingCreditsAsync(string token)
+    public async Task<double> GetRemainingCreditsAsync(string token, string deviceId)
     {
-        using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/pay/user_current_entitlement_list", token, "{}");
+        using var req = BuildRequest(HttpMethod.Post, "/trae/api/v2/pay/user_current_entitlement_list", token, deviceId, "{}");
         try
         {
             using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
