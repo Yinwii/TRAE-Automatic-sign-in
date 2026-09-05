@@ -323,47 +323,42 @@ public class GitHubApiClient
         return false;
     }
 
-    /// <summary>获取最新一次 workflow run 的结论（success/failure/null）。</summary>
+    /// <summary>获取 checkin workflow 最近一次 run 的结论（success/failure/null；运行中为 null）。</summary>
     public async Task<string?> GetLatestRunConclusionAsync(string token, string login)
-    {
-        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/runs?per_page=1", token);
-        var json = await resp.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.TryGetProperty("workflow_runs", out var arr) && arr.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var run in arr.EnumerateArray())
-            {
-                if (run.TryGetProperty("conclusion", out var c) && c.ValueKind == JsonValueKind.String)
-                    return c.GetString();
-                if (run.TryGetProperty("status", out var s) && s.GetString() != "completed")
-                    return null; // 尚未完成
-            }
-        }
-        return null;
-    }
+        => (await GetLatestCheckinRunAsync(token, login, status: null))?.Conclusion;
 
-    /// <summary>获取最近一次已完成的 workflow run（结论、状态、时间、编号、地址）。</summary>
+    /// <summary>获取 checkin workflow 最近一次已完成的 run（结论、状态、时间、编号、地址）。</summary>
     public async Task<WorkflowRunInfo?> GetLatestRunAsync(string token, string login)
+        => await GetLatestCheckinRunAsync(token, login, status: "completed");
+
+    /// <summary>
+    /// 只查询「Trae Daily Checkin」这个 workflow 的运行，避免把仓库里其它 workflow
+    /// （如 push 触发的 CI Build、tag 触发的 Release）误当成云端签到结果。
+    /// </summary>
+    private async Task<WorkflowRunInfo?> GetLatestCheckinRunAsync(string token, string login, string? status)
     {
-        // status=completed 只取已完成的运行，避免启动瞬间拿到 in_progress 的 run 而误显示「运行中」
-        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/runs?per_page=1&status=completed", token);
+        long wfId = await GetWorkflowIdAsync(token, login);
+        if (wfId < 0) return null;
+
+        var query = $"?workflow_id={wfId}&per_page=1";
+        if (!string.IsNullOrEmpty(status)) query += "&status=" + status;
+
+        using var resp = await SendApiAsync(HttpMethod.Get, $"/repos/{login}/{SourceRepo}/actions/runs{query}", token);
         if (!resp.IsSuccessStatusCode) return null;
         var json = await resp.Content.ReadAsStringAsync();
         using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("workflow_runs", out var arr) || arr.ValueKind != JsonValueKind.Array)
+        if (!doc.RootElement.TryGetProperty("workflow_runs", out var arr) ||
+            arr.ValueKind != JsonValueKind.Array || arr.GetArrayLength() == 0)
             return null;
 
-        foreach (var run in arr.EnumerateArray())
-        {
-            var info = new WorkflowRunInfo();
-            info.Conclusion = run.TryGetProperty("conclusion", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
-            info.Status = run.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
-            info.CreatedAt = run.TryGetProperty("created_at", out var ca) && ca.ValueKind == JsonValueKind.String ? ca.GetString() : null;
-            info.RunNumber = run.TryGetProperty("run_number", out var rn) && rn.TryGetInt64(out var rnv) ? rnv : 0;
-            info.HtmlUrl = run.TryGetProperty("html_url", out var hu) && hu.ValueKind == JsonValueKind.String ? hu.GetString() : null;
-            return info;
-        }
-        return null;
+        var run = arr[0];
+        var info = new WorkflowRunInfo();
+        info.Conclusion = run.TryGetProperty("conclusion", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+        info.Status = run.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.String ? s.GetString() : null;
+        info.CreatedAt = run.TryGetProperty("created_at", out var ca) && ca.ValueKind == JsonValueKind.String ? ca.GetString() : null;
+        info.RunNumber = run.TryGetProperty("run_number", out var rn) && rn.TryGetInt64(out var rnv) ? rnv : 0;
+        info.HtmlUrl = run.TryGetProperty("html_url", out var hu) && hu.ValueKind == JsonValueKind.String ? hu.GetString() : null;
+        return info;
     }
 
     /// <summary>

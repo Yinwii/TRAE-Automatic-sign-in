@@ -41,7 +41,7 @@ public class AccountStore
     /// <summary>新增账号并设为激活（调用方负责 Login 与 Save）。</summary>
     public TraeAccount AddNew()
     {
-        var acc = new TraeAccount { DeviceId = GenerateDeviceId() };
+        var acc = new TraeAccount { DeviceId = NewUniqueDeviceId(exceptId: null) };
         _config.Accounts.Add(acc);
         _config.ActiveAccountId = acc.Id;
         return acc;
@@ -64,11 +64,25 @@ public class AccountStore
         return true;
     }
 
-    /// <summary>DeviceId 为空时填充 16 位数字；非空保留。</summary>
+    /// <summary>DeviceId 为空时填充与其它账号不重复的 16 位数字；非空保留。</summary>
     public void EnsureDeviceId(TraeAccount account)
     {
         if (string.IsNullOrWhiteSpace(account.DeviceId))
-            account.DeviceId = GenerateDeviceId();
+            account.DeviceId = NewUniqueDeviceId(exceptId: account.Id);
+    }
+
+    /// <summary>生成不与已存在账号冲突的 16 位设备号（多账号共用同一设备号会触发 9074）。</summary>
+    private string NewUniqueDeviceId(string? exceptId)
+    {
+        var used = new HashSet<string>(_config.Accounts
+            .Where(a => a.Id != exceptId)
+            .Select(a => a.DeviceId));
+        string id;
+        do
+        {
+            id = GenerateDeviceId();
+        } while (used.Contains(id));
+        return id;
     }
 
     private static string GenerateDeviceId()

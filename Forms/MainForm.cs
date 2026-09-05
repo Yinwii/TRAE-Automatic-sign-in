@@ -757,6 +757,13 @@ public partial class MainForm : Form
             return;
         }
 
+        // 兜底：激活账号也确保设备号非空（仪表盘请求同样带 x-device-id）
+        if (string.IsNullOrWhiteSpace(acc.DeviceId))
+        {
+            _accountStore.EnsureDeviceId(acc);
+            _config.Save();
+        }
+
         var status = await GetStatusWithValidTokenAsync(acc);
         if (!string.IsNullOrEmpty(acc.Token))
         {
@@ -839,6 +846,15 @@ public partial class MainForm : Form
         {
             SetLog("没有可签到的账号，请先在设置页添加账号。");
             return;
+        }
+        // 兜底：签到前确保每个账号都有不重复的 16 位设备号（缺号/重复会触发风控 9074）
+        foreach (var acc in enabled)
+        {
+            if (string.IsNullOrWhiteSpace(acc.DeviceId))
+            {
+                _accountStore.EnsureDeviceId(acc);
+                _config.Save();
+            }
         }
         SetLog($"开始为 {enabled.Count} 个账号签到…");
 
