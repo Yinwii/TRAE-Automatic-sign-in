@@ -22,7 +22,7 @@ public partial class MainForm
     {
         var p = new Panel { Dock = DockStyle.Fill, BackColor = ContentBg, Padding = new Padding(16) };
         var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = ContentBg };
-        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 170));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -79,7 +79,7 @@ public partial class MainForm
         _btnUsePat.Click += async (_, _) => await UsePatAsync();
 
         _cloudActionRow.Dock = DockStyle.Bottom;
-        _cloudActionRow.Height = 40;
+        _cloudActionRow.Height = 48;
         _cloudActionRow.ColumnCount = 2;
         _cloudActionRow.RowCount = 1;
         _cloudActionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
