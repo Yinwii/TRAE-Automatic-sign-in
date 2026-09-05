@@ -14,6 +14,7 @@ public partial class MainForm : Form
     private static readonly Color TextMuted = Color.FromArgb(100, 116, 139);   // #64748B
 
     private AppConfig _config;
+    private readonly AccountStore _accountStore;
     private readonly TraeApiClient _api;
     private readonly string _userDataDir;
     private NotifyIcon _tray = new();
@@ -39,6 +40,9 @@ public partial class MainForm : Form
     // Token 信息（设置页）
     private readonly TextBox _txtToken = new();
     private readonly Label _lblTokenTime = new();
+
+    // 账号管理（设置页）
+    private readonly ComboBox _cmbAccount = new();
 
     // 飞书通知（设置页）
     private readonly TextBox _txtWebhook = new();
@@ -72,15 +76,20 @@ public partial class MainForm : Form
         return SystemIcons.Application;
     }
 
+    /// <summary>某账号专属的 WebView2 用户数据目录（账号间登录态隔离）。</summary>
+    private string AccountWebViewDir(TraeAccount account)
+        => Path.Combine(_userDataDir, "account_" + account.Id);
+
     public MainForm()
     {
         _config = AppConfig.Load();
-        _api = new TraeApiClient(_config.DeviceId);
+        _accountStore = new AccountStore(_config);
+        _api = new TraeApiClient();
         _userDataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TraeCheckin", "WebView");
 
         Text = "Trae 每日签到助手";
-        ClientSize = new Size(900, 720);
+        ClientSize = new Size(1200, 780);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = true;
@@ -196,6 +205,7 @@ public partial class MainForm : Form
             if (nav.Controls[0] is Label l)
                 l.ForeColor = i == index ? Color.White : Color.FromArgb(203, 213, 225);
         }
+        if (index == 3) RefreshAccountCombo();   // 切到设置页时同步账号下拉
     }
 
     private Control BuildContentHost()
@@ -316,8 +326,8 @@ public partial class MainForm : Form
         var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, BackColor = ContentBg };
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
-        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -327,10 +337,10 @@ public partial class MainForm : Form
         var autoStartPanel = CardPanel("开机自启动", BuildAutoStartRow());
         grid.Controls.Add(autoStartPanel, 0, 1);
 
-        var tokenPanel = CardPanel("登录 Token", BuildTokenRow());
+        var tokenPanel = CardPanel("当前账号登录 Token", BuildTokenRow());
         grid.Controls.Add(tokenPanel, 0, 2);
 
-        var acctPanel = CardPanel("账号", BuildAccountRow());
+        var acctPanel = CardPanel("多账号管理", BuildAccountRow());
         grid.Controls.Add(acctPanel, 0, 3);
 
         var notifyPanel = CardPanel("云端签到推送（飞书机器人）", BuildWebhookRow());
@@ -404,15 +414,16 @@ public partial class MainForm : Form
 
     private void CopyToken()
     {
-        if (string.IsNullOrEmpty(_config.Token))
+        var acc = CurAccount;
+        if (acc == null || string.IsNullOrEmpty(acc.Token))
         {
             MessageBox.Show("暂无 token，请先登录。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
         try
         {
-            Clipboard.SetText(_config.Token);
-            SetLog("Token 已复制到剪贴板。");
+            Clipboard.SetText(acc.Token);
+            SetLog("[" + DisplayName(acc) + "] Token 已复制到剪贴板。");
         }
         catch (Exception ex)
         {
@@ -422,8 +433,11 @@ public partial class MainForm : Form
 
     private void UpdateTokenDisplay()
     {
-        _txtToken.Text = string.IsNullOrEmpty(_config.Token) ? "未登录，暂无 token" : _config.Token;
-        _lblTokenTime.Text = "最后更新：" + (_config.TokenUpdatedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "从未");
+        var acc = CurAccount;
+        _txtToken.Text = acc == null || string.IsNullOrEmpty(acc.Token) ? "未登录，暂无 token" : acc.Token;
+        _lblTokenTime.Text = acc == null
+            ? "未登录"
+            : "最后更新：" + (acc.TokenUpdatedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "从未");
     }
 
     private Control BuildAutoRow()
@@ -471,20 +485,120 @@ public partial class MainForm : Form
 
     private Control BuildAccountRow()
     {
-        var row = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
-        var btnLogin2 = new Button { Text = "重新登录", Width = 100, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = CardBg };
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        table.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var top = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+
+        _cmbAccount.DropDownStyle = ComboBoxStyle.DropDownList;
+        _cmbAccount.Width = 280;
+        _cmbAccount.Height = 28;
+        _cmbAccount.Margin = new Padding(0, 3, 10, 0);
+        _cmbAccount.FlatStyle = FlatStyle.Flat;
+        _cmbAccount.SelectedIndexChanged += (_, _) => OnAccountSelected();
+        top.Controls.Add(_cmbAccount);
+
+        var btnAdd = new Button { Text = "添加账号", Width = 96, Height = 30, Margin = new Padding(0, 2, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, Cursor = Cursors.Hand };
+        btnAdd.FlatAppearance.BorderSize = 0;
+        btnAdd.Click += async (_, _) => await AddAccountAsync();
+        top.Controls.Add(btnAdd);
+
+        var btnLogin2 = new Button { Text = "重新登录", Width = 92, Height = 30, Margin = new Padding(0, 2, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
         btnLogin2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
-        btnLogin2.Click += async (_, _) => await LoginAndRefreshAsync();
-        var btnRefresh2 = new Button { Text = "刷新", Width = 80, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
-        btnRefresh2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
-        btnRefresh2.Click += async (_, _) => await RefreshAllAsync();
-        var btnExit2 = new Button { Text = "退出", Width = 80, Height = 32, Margin = new Padding(0, 4, 10, 4), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
-        btnExit2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
-        btnExit2.Click += (_, _) => ExitApp();
-        row.Controls.Add(btnLogin2);
-        row.Controls.Add(btnRefresh2);
-        row.Controls.Add(btnExit2);
-        return row;
+        btnLogin2.Click += async (_, _) => { if (CurAccount != null) await LoginAndRefreshAsync(CurAccount); };
+        top.Controls.Add(btnLogin2);
+
+        var btnDel = new Button { Text = "删除", Width = 70, Height = 30, Margin = new Padding(0, 2, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        btnDel.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
+        btnDel.Click += (_, _) => RemoveAccount();
+        top.Controls.Add(btnDel);
+
+        var lbl = new Label { Text = "切换账号即刷新仪表盘。", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
+        top.Controls.Add(lbl);
+
+        table.Controls.Add(top, 0, 0);
+        RefreshAccountCombo();
+        return table;
+    }
+
+    private void RefreshAccountCombo()
+    {
+        var prev = _config.ActiveAccountId;
+        _cmbAccount.Items.Clear();
+        foreach (var a in _config.Accounts)
+            _cmbAccount.Items.Add(ComboText(a));
+        int idx = _config.Accounts.FindIndex(a => a.Id == prev);
+        _cmbAccount.SelectedIndex = idx >= 0 ? idx : (_config.Accounts.Count > 0 ? 0 : -1);
+        UpdateTokenDisplay();
+    }
+
+    private string ComboText(TraeAccount a)
+    {
+        var days = "";
+        if (a.TokenUpdatedAt.HasValue)
+            days = "（Token 更新于 " + a.TokenUpdatedAt.Value.ToString("MM-dd HH:mm") + "）";
+        return DisplayName(a) + (a.Enabled ? "" : "（停用）") + days;
+    }
+
+    private void OnAccountSelected()
+    {
+        if (_cmbAccount.SelectedIndex < 0) return;
+        var id = _config.Accounts[_cmbAccount.SelectedIndex].Id;
+        if (_config.ActiveAccountId != id)
+        {
+            _config.ActiveAccountId = id;
+            _config.Save();
+            _ = RefreshAllAsync();
+        }
+        UpdateTokenDisplay();
+    }
+
+    private async Task AddAccountAsync()
+    {
+        var acc = _accountStore.AddNew();
+        _accountStore.EnsureDeviceId(acc);
+        _config.Save();
+        RefreshAccountCombo();
+        var status = await LoginAndRefreshAsync(acc);
+        if (status == null)
+        {
+            // 登录取消/失败：移除刚建的空壳账号
+            _accountStore.Remove(acc.Id);
+            _config.Save();
+            RefreshAccountCombo();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(acc.Name))
+        {
+            acc.Name = "账号" + (_config.Accounts.Count);
+            _config.Save();
+        }
+        RefreshAccountCombo();
+        await RefreshAllAsync();
+        SetLog("已添加账号 " + DisplayName(acc));
+    }
+
+    private void RemoveAccount()
+    {
+        var acc = CurAccount;
+        if (acc == null) return;
+        if (_config.Accounts.Count <= 1)
+        {
+            MessageBox.Show("至少保留一个账号。要清空请删除后重新添加。", "提示",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        var name = DisplayName(acc);
+        var r = MessageBox.Show($"确定删除账号「{name}」？（仅删除本地记录，不影响该 Trae 账号）", "删除账号",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (r != DialogResult.Yes) return;
+        try { Directory.Delete(AccountWebViewDir(acc), recursive: true); } catch { /* 忽略删除失败 */ }
+        _accountStore.Remove(acc.Id);
+        _config.Save();
+        RefreshAccountCombo();
+        SetLog("已删除账号：" + name);
+        _ = RefreshAllAsync();
     }
 
     private Control BuildWebhookRow()
@@ -588,8 +702,8 @@ public partial class MainForm : Form
     protected override async void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        var hasToken = !string.IsNullOrEmpty(_config.Token);
-        SetLog($"程序已启动，已{(hasToken ? "登录" : "未登录，请在设置页登录")}");
+        var anyToken = _config.Accounts.Any(a => !string.IsNullOrEmpty(a.Token));
+        SetLog($"程序已启动，已{(anyToken ? "登录" : "未登录，请在设置页添加/登录账号")}");
         await RefreshAllAsync();
         StartAutoTimer();
     }
@@ -615,17 +729,26 @@ public partial class MainForm : Form
         SetLog(late
             ? $"已超过设定的自动签到时间 {target:hh\\:mm}，执行补签…"
             : $"到达自动签到时间 {target:hh\\:mm}，开始签到…");
-        await RefreshAllAsync();
-        await DoCheckinAsync();
+        await DoCheckinAsync();   // DoCheckinAsync 遍历所有启用账号，结束时内部会刷新仪表盘
     }
 
     private async Task RefreshAllAsync()
     {
-        var status = await GetStatusWithValidTokenAsync();
+        var acc = CurAccount;
         var remaining = _config.LastRemaining;
-        if (!string.IsNullOrEmpty(_config.Token))
+        if (acc == null)
         {
-            var r = await _api.GetRemainingCreditsAsync(_config.Token);
+            _lblRemaining.Text = "—";
+            _lblStatus.Text = "未登录";
+            _lblReward.Text = "—";
+            await RefreshCloudStatusAsync();
+            return;
+        }
+
+        var status = await GetStatusWithValidTokenAsync(acc);
+        if (!string.IsNullOrEmpty(acc.Token))
+        {
+            var r = await _api.GetRemainingCreditsAsync(acc.Token, acc.DeviceId);
             if (r >= 0) { remaining = r; _config.LastRemaining = r; _config.Save(); }
         }
 
@@ -640,7 +763,7 @@ public partial class MainForm : Form
         }
         else _lblStatus.Text = "获取失败";
 
-        // 每天首次刷新时记录当前总积分，便于趋势图立即有数据
+        // 每天首次刷新时记录当前总积分（当前激活账号），便于趋势图立即有数据
         if (remaining >= 0 && !TotalHistoryHasToday())
             AppendTotalHistory(DateTime.Now, remaining);
 
@@ -699,60 +822,96 @@ public partial class MainForm : Form
 
     private async Task DoCheckinAsync()
     {
-        var status = await GetStatusWithValidTokenAsync();
-        if (status != null && status.checked_in)
+        var enabled = _accountStore.EnabledAccounts().ToList();
+        if (enabled.Count == 0)
         {
-            SetLog("今日已签到，无需重复签到。");
-            if (_config.LastCheckinDate != DateTime.Today)
-                RecordCheckin(status.credits);
-            await RefreshAllAsync();
+            SetLog("没有可签到的账号，请先在设置页添加账号。");
             return;
         }
-        if (string.IsNullOrEmpty(_config.Token))
+        SetLog($"开始为 {enabled.Count} 个账号签到…");
+
+        var results = new List<(TraeAccount Acc, bool Ok, double Gained, double Remaining)>();
+        foreach (var acc in enabled)
         {
-            SetLog("未登录，请先在设置页登录。");
-            return;
-        }
-        SetLog("正在签到…");
-        var result = await _api.ClaimAsync(_config.Token);
-        if (result == null || result.code != 0)
-        {
-            SetLog("签到失败：" + (_api.LastError ?? result?.message ?? "未知错误"));
-            NotifyNativeCheckin(false, 0);
-            return;
+            await CheckinOneAsync(acc, results);
         }
 
-        // claim 响应只含 code/message，本次所得积分需从 status 接口读取
-        var after = await _api.GetStatusAsync(_config.Token);
-        double gained = CheckinEvaluator.ResolveGainedCredits(after);
+        // 本地飞书推送：多账号汇总成一条
+        await NotifyFeishuBatchAsync(results);
 
-        // 未能取得积分数据时，不当作新签到记录，避免写入 0 积分污染历史
-        if (gained <= 0)
-        {
-            SetLog("签到成功，但未能读取本次积分数额。");
-            if (_config.LastCheckinDate != DateTime.Today)
-            {
-                _config.LastCheckinDate = DateTime.Today;
-                _config.Save();
-            }
-            await RefreshAllAsync();
-            return;
-        }
-
-        SetLog($"签到成功！获得 {gained:0} 积分。");
-        RecordCheckin(gained);
+        SetLog("本轮全部账号签到结束。");
         await RefreshAllAsync();
-
-        // 记录签到后的总积分余额（用于趋势图）
-        double total = -1;
-        if (!string.IsNullOrEmpty(_config.Token))
-            total = await _api.GetRemainingCreditsAsync(_config.Token);
-        if (total >= 0) AppendTotalHistory(DateTime.Now, total);
-
-        NotifyNativeCheckin(true, gained, total);
     }
 
-    /// <summary>签到后弹出 Windows 原生通知（托盘气泡）。</summary>
+    private async Task CheckinOneAsync(TraeAccount acc, List<(TraeAccount, bool, double, double)> results)
+    {
+        var name = DisplayName(acc);
+        var status = await GetStatusWithValidTokenAsync(acc);
+        if (status != null && status.checked_in)
+        {
+            SetLog($"[{name}] 今日已签到，无需重复签到。");
+            if (acc.LastCheckinDate != DateTime.Today)
+                RecordCheckin(acc, status.credits);
+            var rem = await RemainingOfAsync(acc);
+            results.Add((acc, true, status.credits, rem));
+            return;
+        }
+        if (string.IsNullOrEmpty(acc.Token))
+        {
+            SetLog($"[{name}] 未登录，跳过。");
+            results.Add((acc, false, 0, -1));
+            return;
+        }
+        SetLog($"[{name}] 正在签到…");
+        var result = await _api.ClaimAsync(acc.Token, acc.DeviceId);
+        if (result == null)
+        {
+            SetLog($"[{name}] 签到失败：" + (_api.LastError ?? "未知错误"));
+            results.Add((acc, false, 0, -1));
+            return;
+        }
+        var after = await _api.GetStatusAsync(acc.Token, acc.DeviceId);
+        var gained = CheckinEvaluator.ResolveGainedCredits(after ?? result);
+        if (gained > 0)
+        {
+            SetLog($"[{name}] 签到成功！获得 {gained:0} 积分。");
+            RecordCheckin(acc, gained);
+            var total = await RemainingOfAsync(acc);
+            if (total >= 0 && acc.Id == CurAccount?.Id) AppendTotalHistory(DateTime.Now, total);
+            results.Add((acc, true, gained, total));
+            NotifyNativeCheckin(true, name, gained, total);
+        }
+        else
+        {
+            var msg = result.message;
+            SetLog($"[{name}] 签到失败：{msg ?? (_api.LastError ?? "未知错误")}");
+            results.Add((acc, false, 0, -1));
+            NotifyNativeCheckin(false, name);
+        }
+    }
+
+    private async Task<double> RemainingOfAsync(TraeAccount acc)
+    {
+        if (string.IsNullOrEmpty(acc.Token)) return -1;
+        return await _api.GetRemainingCreditsAsync(acc.Token, acc.DeviceId);
+    }
+
+    /// <summary>本地飞书推送：把一批账号结果汇总为一条消息（webhook 为空自动跳过）。</summary>
+    private async Task NotifyFeishuBatchAsync(List<(TraeAccount Acc, bool Ok, double Gained, double Remaining)> results)
+    {
+        if (string.IsNullOrWhiteSpace(_config.FeishuWebhook) || results.Count == 0) return;
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Trae 多账号签到结果");
+        foreach (var r in results)
+        {
+            var name = DisplayName(r.Acc);
+            sb.AppendLine((r.Ok ? "✅ " : "⚠️ ") + name + (r.Ok ? $"  获得 {r.Gained:0} 积分" : "  失败"));
+        }
+        var ok = await FeishuNotifier.SendTextAsync(_config.FeishuWebhook, sb.ToString());
+        SetLog(ok ? "飞书推送已发送。" : "飞书推送发送失败，请检查 webhook。");
+    }
+
+    /// <summary>签到后弹出 Windows 原生通知（托盘气泡，单账号旧入口保留兼容）。</summary>
     private void NotifyNativeCheckin(bool success, double gainedCredits, double remaining = -1)
     {
         try
@@ -771,56 +930,84 @@ public partial class MainForm : Form
         catch { /* 通知失败不影响签到主流程 */ }
     }
 
-    private async Task<CheckinStatus?> GetStatusWithValidTokenAsync()
+    /// <summary>签到后弹出 Windows 原生通知（多账号版，标题带账号名）。</summary>
+    private void NotifyNativeCheckin(bool success, string accountName, double gainedCredits = 0, double remaining = -1)
     {
-        if (!string.IsNullOrEmpty(_config.Token))
+        try
         {
-            var st = await _api.GetStatusAsync(_config.Token);
+            if (success)
+            {
+                string text = $"[{accountName}] 本次获得：{gainedCredits:0} 积分";
+                if (remaining >= 0) text += $"\n当前剩余：{remaining:0.##} 积分";
+                _tray.ShowBalloonTip(5000, "Trae 签到成功 ✓", text, ToolTipIcon.Info);
+            }
+            else
+            {
+                _tray.ShowBalloonTip(5000, "Trae 签到失败 ⚠", $"[{accountName}] 请检查会话是否过期，重新登录后重试。", ToolTipIcon.Error);
+            }
+        }
+        catch { /* 通知失败不影响签到主流程 */ }
+    }
+
+    /// <summary>当前激活账号（无账号时 null，UI 据此呈现未登录态）。</summary>
+    private TraeAccount? CurAccount
+        => _config.Accounts.Count > 0 ? _accountStore.ActiveAccount : null;
+
+    /// <summary>账号展示名：无备注时用 Id 前 4 位大写。</summary>
+    private static string DisplayName(TraeAccount acc)
+        => string.IsNullOrWhiteSpace(acc.Name) ? "账号 " + acc.Id[..4].ToUpperInvariant() : acc.Name!;
+
+    private async Task<CheckinStatus?> GetStatusWithValidTokenAsync(TraeAccount account)
+    {
+        if (!string.IsNullOrEmpty(account.Token))
+        {
+            var st = await _api.GetStatusAsync(account.Token, account.DeviceId);
             if (st != null && st.code == 0) return st;
-            SetLog("token 已失效，尝试用会话 Cookie 静默换新…");
+            SetLog("[" + DisplayName(account) + "] token 已失效，尝试用会话 Cookie 静默换新…");
         }
 
         // 优先用 X-Cloudide-Session（约 14 天有效）静默换新 token，避免频繁重新登录
-        if (!string.IsNullOrEmpty(_config.Session))
+        if (!string.IsNullOrEmpty(account.Session))
         {
-            var renewed = await _api.GetUserTokenAsync(_config.Session);
+            var renewed = await _api.GetUserTokenAsync(account.Session);
             if (!string.IsNullOrEmpty(renewed))
             {
-                _config.Token = renewed;
-                _config.TokenUpdatedAt = DateTime.Now;
+                account.Token = renewed;
+                account.TokenUpdatedAt = DateTime.Now;
                 _config.Save();
-                SetLog("token 已通过会话 Cookie 静默换新。");
-                UpdateTokenDisplay();
-                var st = await _api.GetStatusAsync(renewed);
+                SetLog("[" + DisplayName(account) + "] token 已通过会话 Cookie 静默换新。");
+                if (account.Id == CurAccount?.Id) UpdateTokenDisplay();
+                var st = await _api.GetStatusAsync(renewed, account.DeviceId);
                 if (st != null && st.code == 0) return st;
             }
             else
             {
-                SetLog("会话 Cookie 已失效：" + (_api.LastError ?? "未知错误"));
+                SetLog("[" + DisplayName(account) + "] 会话 Cookie 已失效：" + (_api.LastError ?? "未知错误"));
             }
         }
 
-        return await LoginAndRefreshAsync();
+        return null;
     }
 
-    private async Task<CheckinStatus?> LoginAndRefreshAsync()
+    private async Task<CheckinStatus?> LoginAndRefreshAsync(TraeAccount account)
     {
         string token = string.Empty;
         string? session = null;
-        using (var login = new LoginForm(_userDataDir, _config.Token, (t, s) => { token = t; session = s; }))
+        using (var login = new LoginForm(AccountWebViewDir(account), account.Token, (t, s) => { token = t; session = s; }))
             login.ShowDialog();
         if (string.IsNullOrEmpty(token))
         {
             SetLog("登录取消。");
             return null;
         }
-        _config.Token = token;
-        if (!string.IsNullOrEmpty(session)) _config.Session = session;
-        _config.TokenUpdatedAt = DateTime.Now;
+        account.Token = token;
+        if (!string.IsNullOrEmpty(session)) account.Session = session;
+        account.TokenUpdatedAt = DateTime.Now;
+        _accountStore.EnsureDeviceId(account);
         _config.Save();
-        SetLog("登录成功，token 已保存。");
-        UpdateTokenDisplay();
-        return await _api.GetStatusAsync(token);
+        SetLog("[" + DisplayName(account) + "] 登录成功，token 已保存。");
+        if (account.Id == CurAccount?.Id) UpdateTokenDisplay();
+        return await _api.GetStatusAsync(token, account.DeviceId);
     }
 
     private void SetLog(string msg)
@@ -830,19 +1017,20 @@ public partial class MainForm : Form
         _log.TopIndex = _log.Items.Count - 1;
     }
 
-    private void RecordCheckin(double credits)
+    private void RecordCheckin(TraeAccount account, double credits)
     {
-        _config.LastCheckinDate = DateTime.Today;
+        account.LastCheckinDate = DateTime.Today;
         _config.Save();
-        AppendHistory(DateTime.Now, credits);
+        AppendHistory(DateTime.Now, credits, DisplayName(account));
     }
 
-    private void AppendHistory(DateTime time, double credits)
+    private void AppendHistory(DateTime time, double credits, string accountName)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(HistoryPath)!);
-            File.AppendAllText(HistoryPath, $"{time:yyyy-MM-dd HH:mm}  签到成功  +{credits:0} 积分{Environment.NewLine}");
+            File.AppendAllText(HistoryPath,
+                $"{time:yyyy-MM-dd HH:mm}  [{accountName}]  签到成功  +{credits:0} 积分{Environment.NewLine}");
         }
         catch { }
         ReloadHistory();
@@ -868,8 +1056,9 @@ public partial class MainForm : Form
             _historyList.Items.Clear();
             foreach (var line in lines)
                 _historyList.Items.Add(line);
-            _lblLastCheckin.Text = _config.LastCheckinDate.HasValue
-                ? $"最近签到：{_config.LastCheckinDate:yyyy-MM-dd}"
+            var acc = CurAccount;
+            _lblLastCheckin.Text = acc != null && acc.LastCheckinDate.HasValue
+                ? $"最近签到（{DisplayName(acc)}）：{acc.LastCheckinDate:yyyy-MM-dd}"
                 : "暂无签到记录";
         }
         catch { }

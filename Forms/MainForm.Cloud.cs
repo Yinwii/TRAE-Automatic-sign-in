@@ -348,11 +348,18 @@ public partial class MainForm
 
     private async Task DeployAsync()
     {
-        if (string.IsNullOrEmpty(_config.Session))
+        // Phase 1：云端部署先按「当前激活账号」写入 secret；多账号逐一部署在 Phase 2 规划
+        var acc = CurAccount;
+        if (acc == null || string.IsNullOrEmpty(acc.Session))
         {
-            MessageBox.Show("尚未登录 Trae，请先到「设置」页登录后再部署。", "提示",
+            MessageBox.Show("尚未登录 Trae，请先到「设置」页添加/登录账号后再部署。", "提示",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
+        }
+        if (string.IsNullOrEmpty(acc.DeviceId))
+        {
+            _accountStore.EnsureDeviceId(acc);
+            _config.Save();
         }
 
         _cloudBusy = true;
@@ -389,11 +396,11 @@ public partial class MainForm
                 SetCloudLog("为源仓库点赞失败（可忽略）");
 
             SetCloudLog("正在写入 TRAE_SESSION secret…");
-            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.SessionSecretName, _config.Session)) { HandleDeployFailure(); return; }
+            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.SessionSecretName, acc.Session)) { HandleDeployFailure(); return; }
             SetCloudLog("TRAE_SESSION 写入成功");
 
             SetCloudLog("正在写入 TRAE_DEVICE_ID secret…");
-            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.DeviceIdSecretName, _config.DeviceId)) { HandleDeployFailure(); return; }
+            if (!await _ghApi.SetSecretAsync(token, login, GitHubApiClient.DeviceIdSecretName, acc.DeviceId)) { HandleDeployFailure(); return; }
             SetCloudLog("TRAE_DEVICE_ID 写入成功");
 
             if (!string.IsNullOrEmpty(_config.FeishuWebhook))
