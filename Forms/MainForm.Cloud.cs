@@ -446,9 +446,28 @@ public partial class MainForm
                 SetCloudLog("FEISHU_WEBHOOK 写入成功");
             }
 
-            SetCloudLog("正在启用 workflow…");
+            SetCloudLog("正在查找 checkin workflow…");
             long wfId = await _ghApi.GetWorkflowIdAsync(token, login);
-            if (wfId < 0) { HandleDeployFailure(); return; }
+            if (wfId < 0)
+            {
+                // 公共仓库被 fork 后定时 workflow 默认禁用，fork 上 Actions 未启用时 workflow 列表为空。
+                // 自动开启该 fork 的 Actions 并轮询等待 GitHub 登记，最多约 60 秒。
+                SetCloudLog("fork 中未找到 checkin workflow，正在开启该 fork 的 GitHub Actions…");
+                if (!await _ghApi.EnsureActionsEnabledAsync(token, login)) { HandleDeployFailure(); return; }
+                for (int i = 0; i < 12 && wfId < 0; i++)
+                {
+                    await Task.Delay(5000);
+                    wfId = await _ghApi.GetWorkflowIdAsync(token, login);
+                }
+                if (wfId < 0)
+                {
+                    SetCloudLog("已开启 Actions 但仍未登记 workflow：若该 fork 创建时间早于源仓库添加"
+                        + " checkin.yml，请删除此 fork 后重新部署。");
+                    HandleDeployFailure();
+                    return;
+                }
+                SetCloudLog("GitHub Actions 已开启，checkin workflow 已登记");
+            }
             if (!await _ghApi.EnableWorkflowAsync(token, login, wfId)) { HandleDeployFailure(); return; }
             SetCloudLog("workflow 已启用");
 

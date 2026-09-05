@@ -90,9 +90,12 @@ public class GitHubApiClient
 
     public string? LastError { get; private set; }
 
-    public GitHubApiClient()
+    public GitHubApiClient() : this(new HttpClient { Timeout = TimeSpan.FromSeconds(30) }) { }
+
+    /// <summary>测试专用：注入可拦截的 HttpClient。</summary>
+    internal GitHubApiClient(HttpClient http)
     {
-        _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        _http = http;
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("TraeCheckin/1.4.4");
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }
@@ -206,7 +209,7 @@ public class GitHubApiClient
         catch { return false; }
     }
 
-    /// <summary>是否应跳过给源仓库点星（owner 本人不能也不会点自己的星）。</summary>
+    /// <summary>是否应跳过给源仓库点星</summary>
     public static bool ShouldSkipStar(string login)
         => !string.IsNullOrEmpty(login) && string.Equals(login, SourceOwner, StringComparison.OrdinalIgnoreCase);
 
@@ -302,6 +305,25 @@ public class GitHubApiClient
         }
         LastError = "未找到 workflow：" + WorkflowPath;
         return -1;
+    }
+
+    /// <summary>
+    /// 开启仓库级 GitHub Actions（等价于 Settings → Actions 的启用开关）。
+    /// 公共仓库被 fork 后定时 workflow 默认禁用，GitHub 不会登记 .github/workflows/checkin.yml，
+    /// 导致 workflow 列表为空；须先在 fork 上启用 Actions 才会登记。
+    /// </summary>
+    public async Task<bool> EnsureActionsEnabledAsync(string token, string login)
+    {
+        try
+        {
+            var body = JsonSerializer.Serialize(new { enabled = true, allowed_actions = "all" });
+            using var resp = await SendApiAsync(HttpMethod.Put, $"/repos/{login}/{SourceRepo}/actions/permissions", token, body);
+            if (resp.IsSuccessStatusCode) return true;
+            LastError = "开启 GitHub Actions 失败：HTTP " + (int)resp.StatusCode
+                + "（也可让用户到 fork 的 Settings → Actions → General 手动开启后重试）";
+            return false;
+        }
+        catch (Exception ex) { LastError = ex.Message; return false; }
     }
 
     /// <summary>启用 workflow（fork 后定时任务默认禁用，需手动启用）。</summary>
