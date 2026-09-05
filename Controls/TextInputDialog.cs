@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Windows.Forms;
 
@@ -5,7 +6,7 @@ namespace TraeCheckin;
 
 /// <summary>
 /// 轻量文本输入弹窗：说明 + 掩码输入框 + 显示/隐藏 + 粘贴按钮 + 确定/取消。
-/// 用于云端页粘贴 GitHub Token（PAT）。
+/// 用于云端页粘贴 GitHub Token（PAT）。可选传入外部页面地址，自动显示「打开页面」按钮。
 /// </summary>
 public class TextInputDialog : Form
 {
@@ -19,7 +20,8 @@ public class TextInputDialog : Form
     /// <summary>确定后返回用户输入（含密码掩码解除后的值）。</summary>
     public string? Value { get; private set; }
 
-    public TextInputDialog(string title, string hint)
+    /// <param name="openUrl">非空时显示「打开页面」按钮，点击用默认浏览器打开该地址（如 PAT 创建页）。</param>
+    public TextInputDialog(string title, string hint, string? openUrl = null)
     {
         Text = title;
         Font = new Font("Segoe UI", 9);
@@ -28,14 +30,14 @@ public class TextInputDialog : Form
         MinimizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 320);
+        ClientSize = new Size(560, 352);
         BackColor = Color.White;
         ForeColor = TextMain;
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(20), ColumnCount = 1, RowCount = 4, BackColor = Color.White };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));  // 说明
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 168));  // 说明（需容纳可换行的引导文字，给足高度避免截断）
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));   // 输入行
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));   // 显示/粘贴 工具行
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));   // 工具行
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));   // 按钮行
 
         var lblHint = new Label
@@ -62,6 +64,27 @@ public class TextInputDialog : Form
         var toolRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false };
         toolRow.Controls.Add(_chkShow);
         toolRow.Controls.Add(btnPaste);
+
+        if (!string.IsNullOrWhiteSpace(openUrl))
+        {
+            var btnOpen = new Button
+            {
+                Text = "打开 GitHub 创建页",
+                AutoSize = false,
+                Height = 26,
+                Margin = new Padding(8, 0, 0, 0),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Accent,
+                ForeColor = Color.White,
+                Cursor = Cursors.Hand
+            };
+            btnOpen.Click += (_, _) =>
+            {
+                try { Process.Start(new ProcessStartInfo(openUrl) { UseShellExecute = true }); }
+                catch { /* 打开失败不阻断 */ }
+            };
+            toolRow.Controls.Add(btnOpen);
+        }
 
         var ok = new Button { Text = "确定", DialogResult = DialogResult.OK, Width = 96, Height = 34, BackColor = Accent, ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
         var cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Width = 96, Height = 34, FlatStyle = FlatStyle.Flat };

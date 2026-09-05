@@ -113,10 +113,12 @@ public partial class MainForm
     {
         if (_cloudBusy) return;
         var dlg = new TextInputDialog("粘贴 GitHub Token（PAT）",
-            "1) 打开 https://github.com/settings/personal-access-tokens/new 创建 Fine-grained Token\n" +
-            "2) Resource owner 选你的账号；Repository access 勾选 TRAE-Automatic-sign-in\n" +
+            "自动打开 GitHub 创建页可简化操作：\n" +
+            "1) 点下方「打开 GitHub 创建页」进入 Fine-grained Token 页面（如未登录需先登录）\n" +
+            "2) Repository access 勾选 TRAE-Automatic-sign-in\n" +
             "3) Permissions：Actions / Contents / Pull requests / Secrets / Workflows 均选 Read and write\n" +
-            "4) 生成后把 github_pat_ 开头的 Token 粘贴到下方");
+            "4) 生成后把 github_pat_ 开头的 Token 粘贴到下方输入框，点「确定」即完成授权",
+            "https://github.com/settings/personal-access-tokens/new");
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         string pat = dlg.Value ?? "";
         if (string.IsNullOrWhiteSpace(pat)) return;
