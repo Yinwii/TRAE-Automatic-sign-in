@@ -326,8 +326,8 @@ public partial class MainForm : Form
         var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 6, BackColor = ContentBg };
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 88));
-        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 150));
+        grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 176));
         grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 90));
         grid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -388,7 +388,7 @@ public partial class MainForm : Form
         {
             Text = "复制 Token",
             Width = 100,
-            Height = 28,
+            Height = 34,
             Margin = new Padding(0, 0, 12, 0),
             FlatStyle = FlatStyle.Flat,
             BackColor = Accent,
@@ -401,6 +401,7 @@ public partial class MainForm : Form
         _lblTokenTime.AutoSize = true;
         _lblTokenTime.ForeColor = TextMuted;
         _lblTokenTime.Font = new Font("Segoe UI", 9);
+        _lblTokenTime.Margin = new Padding(0, 9, 0, 0);
 
         bottomRow.Controls.Add(btnCopy);
         bottomRow.Controls.Add(_lblTokenTime);
@@ -486,38 +487,42 @@ public partial class MainForm : Form
     private Control BuildAccountRow()
     {
         var table = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = CardBg };
-        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        table.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         table.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
+        // 第一行：下拉 + 操作按钮（不强制 ComboBox 高度，交给系统按字体计算，避免高 DPI 字形底部被裁）
         var top = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
 
         _cmbAccount.DropDownStyle = ComboBoxStyle.DropDownList;
-        _cmbAccount.Width = 280;
-        _cmbAccount.Height = 28;
-        _cmbAccount.Margin = new Padding(0, 3, 10, 0);
+        _cmbAccount.Width = 300;
+        _cmbAccount.Margin = new Padding(0, 8, 10, 0);
         _cmbAccount.FlatStyle = FlatStyle.Flat;
         _cmbAccount.SelectedIndexChanged += (_, _) => OnAccountSelected();
         top.Controls.Add(_cmbAccount);
 
-        var btnAdd = new Button { Text = "添加账号", Width = 96, Height = 30, Margin = new Padding(0, 2, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, Cursor = Cursors.Hand };
+        var btnAdd = new Button { Text = "添加账号", Width = 96, Height = 34, Margin = new Padding(0, 6, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = Accent, ForeColor = Color.White, Cursor = Cursors.Hand };
         btnAdd.FlatAppearance.BorderSize = 0;
         btnAdd.Click += async (_, _) => await AddAccountAsync();
         top.Controls.Add(btnAdd);
 
-        var btnLogin2 = new Button { Text = "重新登录", Width = 92, Height = 30, Margin = new Padding(0, 2, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        var btnLogin2 = new Button { Text = "重新登录", Width = 92, Height = 34, Margin = new Padding(0, 6, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
         btnLogin2.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
         btnLogin2.Click += async (_, _) => { if (CurAccount != null) await LoginAndRefreshAsync(CurAccount); };
         top.Controls.Add(btnLogin2);
 
-        var btnDel = new Button { Text = "删除", Width = 70, Height = 30, Margin = new Padding(0, 2, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
+        var btnDel = new Button { Text = "删除", Width = 70, Height = 34, Margin = new Padding(0, 6, 8, 0), FlatStyle = FlatStyle.Flat, BackColor = CardBg, ForeColor = TextMain, Cursor = Cursors.Hand };
         btnDel.FlatAppearance.BorderColor = Color.FromArgb(226, 232, 240);
         btnDel.Click += (_, _) => RemoveAccount();
         top.Controls.Add(btnDel);
 
-        var lbl = new Label { Text = "切换账号即刷新仪表盘。", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
-        top.Controls.Add(lbl);
-
         table.Controls.Add(top, 0, 0);
+
+        // 第二行：提示文字独占一行，避免与按钮同排被挤截
+        var hintRow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = CardBg };
+        var lbl = new Label { Text = "切换账号即刷新仪表盘。", ForeColor = TextMuted, AutoSize = true, Margin = new Padding(0, 10, 0, 0) };
+        hintRow.Controls.Add(lbl);
+        table.Controls.Add(hintRow, 0, 1);
+
         RefreshAccountCombo();
         return table;
     }
