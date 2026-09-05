@@ -23,6 +23,10 @@ public class AppConfig
     public string AutoCheckinTime { get; set; } = "08:00";
     public DateTime? LastCheckinDate { get; set; }
     public double LastRemaining { get; set; } = -1;
+    /// <summary>全部 Trae 账号（多账号模型主存储）。</summary>
+    public List<TraeAccount> Accounts { get; set; } = new();
+    /// <summary>仪表盘当前展示的账号 Id；为空时取 Accounts[0]。</summary>
+    public string? ActiveAccountId { get; set; }
 
     private static string ConfigDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "TraeCheckin");
@@ -39,6 +43,18 @@ public class AppConfig
                 var cfg = JsonSerializer.Deserialize<AppConfig>(json);
                 if (cfg != null)
                 {
+                    // 多账号迁移：旧单账号转成 Accounts[0]
+                    if (TryMigrateLegacy(cfg))
+                    {
+                        // 迁移后清空旧字段，避免双份数据源（DeviceId 已复制进新账号）
+                        cfg.Token = null;
+                        cfg.Session = null;
+                        cfg.TokenUpdatedAt = null;
+                        cfg.LastCheckinDate = null;
+                        if (string.IsNullOrEmpty(cfg.ActiveAccountId))
+                            cfg.ActiveAccountId = cfg.Accounts[0].Id;
+                        cfg.Save();
+                    }
                     // 迁移：优先复用官方客户端的真实 Aha 设备 ID，否则签到接口风控会返回 9074
                     var aha = TryResolveAhaDeviceId();
                     if (aha != null && aha != cfg.DeviceId)
@@ -56,6 +72,26 @@ public class AppConfig
         var resolved = TryResolveAhaDeviceId();
         if (resolved != null) fresh.DeviceId = resolved;
         return fresh;
+    }
+
+    /// <summary>
+    /// 单账号 → 多账号迁移：当 Accounts 为空且存在旧版 Token/Session 时，
+    /// 生成第一个账号并放入 Accounts。返回是否发生迁移。幂等（已有账号则不动）。
+    /// </summary>
+    public static bool TryMigrateLegacy(AppConfig cfg)
+    {
+        if (cfg.Accounts.Count > 0) return false;
+        if (string.IsNullOrEmpty(cfg.Token) && string.IsNullOrEmpty(cfg.Session)) return false;
+
+        cfg.Accounts.Add(new TraeAccount
+        {
+            Token = cfg.Token,
+            Session = cfg.Session,
+            DeviceId = string.IsNullOrEmpty(cfg.DeviceId) ? "" : cfg.DeviceId,
+            TokenUpdatedAt = cfg.TokenUpdatedAt,
+            LastCheckinDate = cfg.LastCheckinDate
+        });
+        return true;
     }
 
     /// <summary>
