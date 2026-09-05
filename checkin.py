@@ -11,8 +11,11 @@ Trae 每日签到脚本（GitHub Actions 版）
 依赖：仅标准库，无第三方依赖。
 
 环境变量：
-  TRAE_SESSION   必填。X-Cloudide-Session 的 Cookie 值（登录后从浏览器抓取）
-  TRAE_DEVICE_ID 选填。x-device-id 风控值，16 位数字；缺省随机生成（实测不敏感）
+  TRAE_SESSION        账号 1 的 X-Cloudide-Session Cookie（必填；后端兼容单账号部署）
+  TRAE_DEVICE_ID      账号 1 的 x-device-id，16 位数字（选填，缺省随机）
+  TRAE_SESSION_N      第 N(N≥2) 个账号的会话 Cookie；缺失即停止读取更多账号
+  TRAE_DEVICE_ID_N    第 N 个账号的 x-device-id（选填，缺省随机）
+  全部账号共享：       FEISHU_WEBHOOK（选填，签到后推送一条汇总）
 
 用法：
   python checkin.py
@@ -85,47 +88,74 @@ def beijing_now_str():
     return (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def iter_sessions():
+    """按顺序产出 (账号序号, session, device_id)。账号 1 读 TRAE_SESSION；
+    之后依次读 TRAE_SESSION_2, TRAE_SESSION_3… 直到缺空为止。"""
+    s = os.environ.get("TRAE_SESSION", "").strip()
+    if s:
+        yield 1, s, os.environ.get("TRAE_DEVICE_ID", "").strip()
+    n = 2
+    while True:
+        s = os.environ.get("TRAE_SESSION_%d" % n, "").strip()
+        if not s:
+            break
+        yield n, s, os.environ.get("TRAE_DEVICE_ID_%d" % n, "").strip()
+        n += 1
+
+
+def random_device_id():
+    """随机生成 16 位数字风控设备号（仅在缺省时兜底）。"""
+    return str(random.randint(10**15, 10**16 - 1))
+
+
 def main():
-    session = os.environ.get("TRAE_SESSION", "").strip()
-    if not session:
+    accounts = list(iter_sessions())
+    if not accounts:
         print("错误：缺少环境变量 TRAE_SESSION")
         sys.exit(1)
 
-    device_id = os.environ.get("TRAE_DEVICE_ID", "").strip()
-    if not device_id:
-        device_id = str(random.randint(10**15, 10**16 - 1))
-    print("device_id=%s" % device_id)
-
     webhook = os.environ.get("FEISHU_WEBHOOK", "").strip()
+    ok_names, fail_names = [], []
+    all_ok = True
 
-    try:
-        token = get_token(session)
-        print("已换取新 JWT，长度=%d" % len(token))
-        result = checkin(token, device_id)
-        body = result["body"]
-        print("签到结果: HTTP %s" % result["http"])
-        print(json.dumps(body, ensure_ascii=False))
+    for index, session, device_id in accounts:
+        name = "账号 %d" % index
+        device_id = device_id or random_device_id()
+        print("[%s] device_id=%s" % (name, device_id))
+        try:
+            token = get_token(session)
+            print("[%s] 已换取新 JWT，长度=%d" % (name, len(token)))
+            result = checkin(token, device_id)
+            body = result["body"]
+            code = body.get("code", -1)
+            checked = body.get("checked_in", False)
+            ok = (result["http"] == 200) and (code == 0 or checked)
+            credits = body.get("credits", 0)
+            if ok:
+                print("[%s] 签到成功，本次获得：%s 积分" % (name, credits))
+                ok_names.append(name)
+            else:
+                reason = body.get("message") or ("HTTP %s" % result["http"])
+                print("[%s] 签到失败：%s" % (name, reason))
+                fail_names.append(name)
+                all_ok = False
+        except Exception as e:
+            print("[%s] 签到异常: %s" % (name, e))
+            fail_names.append(name)
+            all_ok = False
 
-        # 判定失败：HTTP 非 200 或 code 非 0 且非「已签到」
-        code = body.get("code", -1)
-        checked = body.get("checked_in", False)
-        success = (result["http"] == 200) and (code == 0 or checked)
+    # 汇总一条飞书推送（无论成功/失败都汇总，webhook 为空则跳过）
+    summary = ["Trae 多账号签到结果", "时间：%s" % beijing_now_str()]
+    if ok_names:
+        summary.append("成功：" + "、".join(ok_names))
+    if fail_names:
+        summary.append("失败：" + "、".join(fail_names))
+    if webhook and (ok_names or fail_names):
+        notify_feishu(webhook, "\n".join(summary))
 
-        credits = body.get("credits", 0)
-        if success:
-            notify_feishu(webhook, "✅ Trae 签到成功\n本次获得：%s 积分\n时间：%s" % (credits, beijing_now_str()))
-        else:
-            notify_feishu(webhook, "⚠️ Trae 签到失败，请检查会话是否过期\n时间：%s" % beijing_now_str())
-
-        if result["http"] != 200:
-            sys.exit(1)
-        if code != 0 and not checked:
-            sys.exit(1)
-        print("签到完成")
-    except Exception as e:
-        print("签到异常: %s" % e)
-        notify_feishu(webhook, "⚠️ Trae 签到异常：%s" % e)
+    if not all_ok:
         sys.exit(1)
+    print("全部账号签到完成")
 
 
 if __name__ == "__main__":
